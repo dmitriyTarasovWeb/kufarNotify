@@ -1,0 +1,27 @@
+{
+  "name": "kufar_notify",
+  "version": "1.0.0",
+  "description": "Kufar parcer (kufar.by) which sends info about new items using unique parameters which configurate in telegram bot. @kufarNotifyBot",
+  "main": "app.js",
+  "scripts": {
+    "start": "pm2 start app.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dmitriyTarasovWeb/kufarNotify"
+  },
+  "keywords": [
+    "kufar",
+    "bot"
+  ],
+  "author": "dmitriyTarasovWeb",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "fs": "^0.0.1-security",
+    "lodash": "^4.17.21",
+    "node-telegram-bot-api": "^0.66.0",
+    "path": "^0.12.7",
+    "pm2": "^5.4.2"
+  }
+}
