@@ -650,7 +650,7 @@ bot.on('message', (message) => {
 
             writeUpdatesToFile(objectLink,chatId)
 
-            if(objectLink.filters.length === 0) {
+            if(objectLink.filters.length === 0 && objectLink.statusText === objectLink.statusesTxtObj.monitoringOn) {
                 objectLink.statusText = objectLink.statusesTxtObj.monitoringOff
 
                 writeUpdatesToFile(objectLink,chatId)
@@ -700,7 +700,6 @@ const findInTextMatch = (description, filters) =>{
 
 
 const isTownMatch = (stateIdCurrent, townIdCurrent, stateIdFilter, townIdFilter) =>{
-    if(townIdFilter === "") return true
     if(stateIdCurrent !== stateIdFilter) return false
     if(townIdFilter === "") return true
     if(townIdCurrent !== townIdFilter) return false 
