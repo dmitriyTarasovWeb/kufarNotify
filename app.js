@@ -700,8 +700,9 @@ const findInTextMatch = (description, filters) =>{
 
 
 const isTownMatch = (stateIdCurrent, townIdCurrent, stateIdFilter, townIdFilter) =>{
-    if(stateIdCurrent !== stateIdFilter) return false
+    
     if(townIdFilter === "") return true
+    if(stateIdCurrent !== stateIdFilter) return false
     if(townIdCurrent !== townIdFilter) return false 
     return true
 }
