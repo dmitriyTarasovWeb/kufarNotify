@@ -766,7 +766,7 @@ async function sendNotification() {
 
 
                     if(linkArrForAlarms[j].priceByn === 0) linkArrForAlarms[j].priceByn = "Договорная"
-                    else linkArrForAlarms[j].priceByn = linkArrForAlarms[j].priceByn + " рублей"
+                    else linkArrForAlarms[j].priceByn = linkArrForAlarms[j].priceByn + " BYN"
 
                     let randomEmoji = EMOJIES[Math.floor(Math.random() * EMOJIES.length-1) + 1]
                     
