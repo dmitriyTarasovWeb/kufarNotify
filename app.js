@@ -318,8 +318,8 @@ function parseArr (arr){
         const parsedObj = {
             category: parseInt(short.category),
             categoryTxt: lodashFinder(short.ad_parameters, "Категория", "vl") === undefined ? lodashFinder(short.ad_parameters, "Подкатегория", "vl") : lodashFinder(short.ad_parameters, "Категория", "vl"),
-            state: parseInt(lodashFinder(short.ad_parameters, "Область", "v")),
-            stateTxt: lodashFinder(short.ad_parameters, "Область", "vl"),
+            state: parseInt(lodashFinder(short.ad_parameters, "Регион", "v")),
+            stateTxt: lodashFinder(short.ad_parameters, "Регион", "vl"),
             town: parseInt(lodashFinder(short.ad_parameters, "Город / Район", "v")),
             townTxt: lodashFinder(short.ad_parameters, "Город / Район", "vl"),
             isPhone: short.phone_hidden,
