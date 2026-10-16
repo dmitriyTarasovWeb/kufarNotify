@@ -25,6 +25,8 @@ const STEP_FOR_BANS = 2
 
 const CHECK_BAN_TIMEOUT = 1000
 
+const IS_TEST = true;
+
 
 module.exports = {
     API_PAGES_1_4,
