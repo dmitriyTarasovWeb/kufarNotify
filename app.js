@@ -15,7 +15,10 @@ const {
     LIMIT_MINUTES_FIRST_BAN,
     STEP_FOR_BANS,
     CHECK_BAN_TIMEOUT,
-    IS_TEST
+    IS_TEST,
+    ADMINS_FILE,
+    OWNER_ID,
+    ADDITIONAL_PAGES_FOR_LOAD
 } = require('./constants.js');
 
 const {
@@ -88,16 +91,25 @@ const {
     subStatesVitebskayaSwitch
 } = require('./telegramBtnCases.js');
 
-const changeKeyboard = (newText, keyboard, chatId, message_id)=>{
-    const opts = {
-        chat_id: chatId,
-        message_id: message_id,
-        reply_markup: {inline_keyboard: keyboard},
-        parse_mode: 'HTML'
 
-    };
-    bot.editMessageText(`<b><i>${newText}</i></b>`, opts);
-}
+const {
+    millisecOfTwoDates,
+    delay,
+    findObjectsNotInArray,
+    mergeArrays,
+    timeStr,
+    changeKeyboard,
+    fetchData,
+    getSecondPagesData,
+    executionTime
+} = require('./helpers.js');
+
+
+const {
+    personalOptions
+} = require('./mainClass.js');
+
+
 
 const changeStateData = (stateId, townId, placeTxt, objectLink, chatId)=>{
     objectLink.state = stateId
@@ -106,7 +118,9 @@ const changeStateData = (stateId, townId, placeTxt, objectLink, chatId)=>{
     if(objectLink.isFilterActive === false) addFilter(objectLink, chatId);
 }
 
-const changeCategoryData = (categoryId, subcategoryId, categoryTxt, objectLink, chatId)=>{
+
+
+const changeCategoryData = (categoryId, subcategoryId, categoryTxt, objectLink, chatId, bot)=>{
 
     objectLink.category = categoryId
     objectLink.subCategory = subcategoryId
@@ -116,160 +130,26 @@ const changeCategoryData = (categoryId, subcategoryId, categoryTxt, objectLink, 
 }
 
 
+
 const lodash = require('lodash');
 const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
+const { addUncaughtExceptionCaptureCallback } = require('process');
 
 
 const classesExemplars = []
 const chatIDS = []
-const OWNER_ID = 929705938
-const ADMINS_FILE = path.join(DIRECTORY_PATH, 'admins.json')
+
 let adminIDS = new Set([OWNER_ID])
 let timer = 0
 
 const bot = new TelegramBot(process.env.TOKEN, { polling: { interval: 1000, autoStart: true } });
 
 
-const millisecOfTwoDates = (firstDate, secondDate) => (firstDate - secondDate) / 1000;
-
-const timeStr = (timeWork) => {
-
-    if (timeWork < 60) return timeWork.toFixed(1) + " секунд";
-    if (timeWork >= 60 && timeWork < 3600) return (timeWork / 60).toFixed(1) + " минут";
-    if (timeWork >= 3600) return (timeWork / 60 / 60).toFixed(1) + " часов";
-
-    return timeWork + " секунд";
-}
-
-async function delay(ms) { await new Promise(resolve => setTimeout(resolve, ms)) }
 
 
-class personalOptions {
-    constructor(categoryTxt, category , subCategory, placeTxt, state, town, filters, arrForAlarms, statusText, timeOfExecution, bansCount, ban, lastTimeBan) {
 
-        this.categoryTxt = categoryTxt || "-";
-        this.category = category || "";
-        this.subCategory = subCategory || "";
-
-        this.placeTxt = placeTxt || "-";
-        this.state = state || "";
-        this.town = town || "";
-
-        this.filters = filters || [];
-        this.arrForAlarms = arrForAlarms || [];
-        this.statusText = statusText || "Не запущен";
-
-        this.timeOfExecution = timeOfExecution || "-";
-        this.bansCount = bansCount || 1;
-        this.ban = ban || false;
-
-        this.lastTimeBan = lastTimeBan || 0
-        this.aiApiKey = '';
-        this.aiCustomPrompt = '';
-        this.aiFilterEnabled = false;
-        this.aiInputMode = '';
-
-        this.isFilterActive = false;
-        this.statusesTxtObj = {
-            monitoringOff: "Не запущен",
-            monitoringOn: "Мониторинг запущен"
-        };
-    }
-
-    allFilters() {
-        let strFilters = ""
-        let t = "      "
-
-        for(let i = 0; i < this.filters.length; i++){
-            strFilters += `${t}<i>Фильтр <b>номер: ${i+1}</b></i>\n${t+t}Локация: <b>${this.filters[i].placeTxt}</b>\n${t+t}Категория: <b>${this.filters[i].categoryTxt}</b>\n${t+t}Нижняя цена: <b>${this.filters[i].minPrice}</b>\n${t+t}Верхняя цена: <b>${this.filters[i].maxPrice}</b>\n${t+t}Теги: <b>${this.filters[i].tags}</b>\n${t+t}Исключающие слова: <b>${this.filters[i].excludeTags || '-'}</b>\n`
-        }
-        if(this.filters.length === 0) return "<b>-</b>"
-
-        return strFilters
-    }
-
-    allOptions() {
-
-        let strFilters = this.allFilters()
-
-        let timeOfExecutionCalculated
-
-        if(this.timeOfExecution === "-") {
-
-            timeOfExecutionCalculated = "-"
-        } else timeOfExecutionCalculated = timeStr(millisecOfTwoDates(new Date(), this.timeOfExecution))
-
-        let str = `<i>Статус мониторинга:</i> <b>${this.statusText}</b>\n<i>Время с начала мониторинга:</i> <b>${timeOfExecutionCalculated}</b>\n<i>Категория:</i> <b>${this.categoryTxt}</b>\n<i>Город/Область:</i> <b>${this.placeTxt}</b>\n<i>Текущие фильтры:</i>\n ${strFilters}`;
-        return str;
-    }
-}
-
-function findObjectsNotInArray(newArr, oldArr) {
-
-    return newArr.filter(obj1 => {
-
-        return !oldArr.some(obj2 => 
-            obj2.ad_id === obj1.ad_id
-        );
-    });
-}
-
-async function fetchData(url, retries = 3) {
-
-    try {
-        const response = await fetch(url, {method: 'GET',});
-
-        if (!response.ok) {
-            if (response.status === 404) return false;
-            console.log(response.status)
-            throw new Error('Network response was not ok.');
-        }
-        const data = await response.json();
-
-        return data;
-    } catch (error) {
-
-        console.log("ОШИБКА ПРИ ПОЛУЧЕНИИ ОБЬЕКТА" + error.message, url);
-        if (retries <= 0) return false;
-        await delay(5000);
-        return await fetchData(url, retries - 1);
-    }
-}
-
-async function getSecondPagesData(objects){
-
-    let secondPageData = [];
-    let url
-    try{
-        for (let i = 0; i < objects.length; i++) {
-            url = `https://api.kufar.by/search-api/v2/item/${objects[i].ad_id}/rendered`
-            const secondPageObj = await fetchData(url);
-            if(!secondPageObj || !secondPageObj.result) continue
-
-            secondPageData.push(secondPageObj.result);
-            await delay(100) 
-
-        }
-    } catch(error){
-        console.log(url, error.message)
-    }
-    return secondPageData;
-}
-
-function mergeArrays(...arrays) {
-
-    let mergedArray = [];
-
-    arrays.forEach(array => {
-
-        array.forEach(element => {
-            mergedArray.push(element);
-        });
-    });
-    return mergedArray;
-}
 
 const findNotExist = (inputString) => {
 
@@ -344,17 +224,21 @@ function parseArr (arr){
     return parsedArr
 }
 
+
 const getData = async () =>{
-    let firstPart1_4 = await fetchData(API_PAGES_1_4);
+    let firstTime = new Date().getTime()
+    let currFetch = await fetchData(API_PAGES_1_4);
+    let output = currFetch.ads
 
-    let secondPart5 = await fetchData(API_PAGE_TEMPLATE + firstPart1_4.pagination.pages[4].token);
-    let secondPart6 = await fetchData(API_PAGE_TEMPLATE + secondPart5.pagination.pages[4].token);
-    let secondPart7 = await fetchData(API_PAGE_TEMPLATE + secondPart6.pagination.pages[4].token);
+    for(let i = 0; i < ADDITIONAL_PAGES_FOR_LOAD; i++){
 
-    let mergedArraysFirstHalf =  mergeArrays(firstPart1_4.ads, secondPart5.ads)
-    let mergedArraysSecondHalf =  mergeArrays(secondPart6.ads, secondPart7.ads)
+        currFetch = await fetchData(API_PAGE_TEMPLATE + currFetch.pagination.pages[4].token)
+        output = mergeArrays(output, currFetch.ads)
+    }
 
-    return mergeArrays(mergedArraysFirstHalf, mergedArraysSecondHalf)
+    console.log(executionTime(firstTime) + " получение данных")
+
+    return output
 }
 
 async function startMonitoring(){
@@ -376,19 +260,13 @@ async function startMonitoring(){
 
         if(newObjects.length > 0){
 
-            let firstData = new Date().getTime()
+            let firstTime = new Date().getTime()
 
             newDataSecondsPages = await getSecondPagesData(newObjects)
 
             oldDataFirstPage = newDataFirstPage
 
-            let secondData = new Date().getTime()
-
-            if(((secondData - firstData)/1000)>0){
-                timer = `${newDataSecondsPages.length}  ${(secondData - firstData)/1000} секунд.`
-                // bot.sendMessage(929705938, timer);
-                console.log(timer)
-            }
+            console.log(executionTime(firstTime) + " секунд парсинг подробных данных об обьявлении - " + newDataSecondsPages.length)
 
             let parsedArr = parseArr(newDataSecondsPages)   
             searchMatch(parsedArr)  
@@ -532,38 +410,38 @@ ${getAiPrompt(objectLink)}`);
 
     if(objectLink.isFilterActive === true) return
 
-    if(action === "с_Назад") { changeKeyboard("<i><b>Выберите категорию:</b></i>", categoriesButtons, chatId, msg.message_id); return }
-    if(action === "s_Назад") { changeKeyboard("<i><b>Выберите область мониторинга:</b></i>", statesButtons, chatId, msg.message_id); return }
+    if(action === "с_Назад") { changeKeyboard("<i><b>Выберите категорию:</b></i>", categoriesButtons, chatId, msg.message_id, bot); return }
+    if(action === "s_Назад") { changeKeyboard("<i><b>Выберите область мониторинга:</b></i>", statesButtons, chatId, msg.message_id, bot); return }
 
     if(action === "s___Вся Беларусь") { changeStateData("", "", "Вся Беларусь", objectLink, chatId); return }
 
 
-    if(str === "c___") changeKeyboard(...categoriesSwitch(action, objectLink), chatId, msg.message_id)
+    if(str === "c___") changeKeyboard(...categoriesSwitch(action, objectLink), chatId, msg.message_id, bot)
 
-    if(str === "с_01") changeCategoryData(...subCategories_01_Switch(action), objectLink, chatId)
-    if(str === "с_02") changeCategoryData(...subCategories_02_Switch(action), objectLink, chatId)
-    if(str === "с_15") changeCategoryData(...subCategories_15_Switch(action), objectLink, chatId)
-    if(str === "с_16") changeCategoryData(...subCategories_16_Switch(action), objectLink, chatId)
-    if(str === "с_17") changeCategoryData(...subCategories_17_Switch(action), objectLink, chatId)
-    if(str === "с_05") changeCategoryData(...subCategories_05_Switch(action), objectLink, chatId)
-    if(str === "с_08") changeCategoryData(...subCategories_08_Switch(action), objectLink, chatId)
-    if(str === "с_19") changeCategoryData(...subCategories_19_Switch(action), objectLink, chatId)
-    if(str === "с_18") changeCategoryData(...subCategories_18_Switch(action), objectLink, chatId)
-    if(str === "с_12") changeCategoryData(...subCategories_12_Switch(action), objectLink, chatId)
-    if(str === "с_21") changeCategoryData(...subCategories_21_Switch(action), objectLink, chatId)
-    if(str === "с_03") changeCategoryData(...subCategories_03_Switch(action), objectLink, chatId)
-    if(str === "с_14") changeCategoryData(...subCategories_14_Switch(action), objectLink, chatId)
-    if(str === "с_10") changeCategoryData(...subCategories_10_Switch(action), objectLink, chatId)
-    if(str === "с_04") changeCategoryData(...subCategories_04_Switch(action), objectLink, chatId)
-    if(str === "с_09") changeCategoryData(...subCategories_09_Switch(action), objectLink, chatId)
-    if(str === "с_11") changeCategoryData(...subCategories_11_Switch(action), objectLink, chatId)
-    if(str === "с_20") changeCategoryData(...subCategories_20_Switch(action), objectLink, chatId)
-    if(str === "с_06") changeCategoryData(...subCategories_06_Switch(action), objectLink, chatId)
-    if(str === "с_13") changeCategoryData(...subCategories_13_Switch(action), objectLink, chatId)
-    if(str === "с_07") changeCategoryData(...subCategories_07_Switch(action), objectLink, chatId)
+    if(str === "с_01") changeCategoryData(...subCategories_01_Switch(action), objectLink, chatId, bot)
+    if(str === "с_02") changeCategoryData(...subCategories_02_Switch(action), objectLink, chatId, bot)
+    if(str === "с_15") changeCategoryData(...subCategories_15_Switch(action), objectLink, chatId, bot)
+    if(str === "с_16") changeCategoryData(...subCategories_16_Switch(action), objectLink, chatId, bot)
+    if(str === "с_17") changeCategoryData(...subCategories_17_Switch(action), objectLink, chatId, bot)
+    if(str === "с_05") changeCategoryData(...subCategories_05_Switch(action), objectLink, chatId, bot)
+    if(str === "с_08") changeCategoryData(...subCategories_08_Switch(action), objectLink, chatId, bot)
+    if(str === "с_19") changeCategoryData(...subCategories_19_Switch(action), objectLink, chatId, bot)
+    if(str === "с_18") changeCategoryData(...subCategories_18_Switch(action), objectLink, chatId, bot)
+    if(str === "с_12") changeCategoryData(...subCategories_12_Switch(action), objectLink, chatId, bot)
+    if(str === "с_21") changeCategoryData(...subCategories_21_Switch(action), objectLink, chatId, bot)
+    if(str === "с_03") changeCategoryData(...subCategories_03_Switch(action), objectLink, chatId, bot)
+    if(str === "с_14") changeCategoryData(...subCategories_14_Switch(action), objectLink, chatId, bot)
+    if(str === "с_10") changeCategoryData(...subCategories_10_Switch(action), objectLink, chatId, bot)
+    if(str === "с_04") changeCategoryData(...subCategories_04_Switch(action), objectLink, chatId, bot)
+    if(str === "с_09") changeCategoryData(...subCategories_09_Switch(action), objectLink, chatId, bot)
+    if(str === "с_11") changeCategoryData(...subCategories_11_Switch(action), objectLink, chatId, bot)
+    if(str === "с_20") changeCategoryData(...subCategories_20_Switch(action), objectLink, chatId, bot)
+    if(str === "с_06") changeCategoryData(...subCategories_06_Switch(action), objectLink, chatId, bot)
+    if(str === "с_13") changeCategoryData(...subCategories_13_Switch(action), objectLink, chatId, bot)
+    if(str === "с_07") changeCategoryData(...subCategories_07_Switch(action), objectLink, chatId, bot)
 
 
-    if(str === "s___") changeKeyboard(...statesSwitch(action, objectLink), chatId, msg.message_id)
+    if(str === "s___") changeKeyboard(...statesSwitch(action, objectLink), chatId, msg.message_id, bot)
 
     if(str === "s_07") changeStateData(...subStatesMinskSwitch(action), objectLink, chatId)
     if(str === "s_01") changeStateData(...subStatesBrestskayaSwitch(action), objectLink, chatId)
@@ -578,10 +456,8 @@ const writeUpdatesToFile = (objectLink, chatId) => {
     fs.mkdirSync(DIRECTORY_PATH, { recursive: true });
     const jsonData = JSON.stringify(objectLink, null, 2);
 
-    // Путь к файлу, в который будем записывать данные
     const filePath = path.join(DIRECTORY_PATH, `${chatId}.json`);
 
-    // Записываем данные в файл
     fs.writeFile(filePath, jsonData, (err) => {
         if (err) { console.error('Ошибка записи в файл:', err); return; }
     });

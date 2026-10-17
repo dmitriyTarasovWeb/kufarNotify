@@ -1,3 +1,4 @@
+const path = require('path');
 
 const API_PAGES_1_4 = "https://api.kufar.by/search-api/v2/search/rendered-paginated?cmp=0&lang=ru&size=172&sort=lst.d"
 const API_PAGE_TEMPLATE = "https://api.kufar.by/search-api/v2/search/rendered-paginated?cmp=0&lang=ru&size=43&sort=lst.d&cursor="
@@ -19,11 +20,17 @@ const OPTIONS_FOR_DATE = {
     second: 'numeric'
 }
 
+const ADDITIONAL_PAGES_FOR_LOAD = 5
+
 const LIMIT_ALARMS_IN_MINUTE = 10;
 const LIMIT_MINUTES_FIRST_BAN = 4
 const STEP_FOR_BANS = 2
 
 const CHECK_BAN_TIMEOUT = 1000
+
+
+const OWNER_ID = 929705938
+const ADMINS_FILE = path.join(DIRECTORY_PATH, 'admins.json')
 
 const IS_TEST = true;
 
@@ -40,5 +47,8 @@ module.exports = {
     LIMIT_ALARMS_IN_MINUTE,
     LIMIT_MINUTES_FIRST_BAN,
     STEP_FOR_BANS,
-    CHECK_BAN_TIMEOUT
+    CHECK_BAN_TIMEOUT,
+    OWNER_ID,
+    ADMINS_FILE,
+    ADDITIONAL_PAGES_FOR_LOAD
 };
