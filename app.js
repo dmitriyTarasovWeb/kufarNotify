@@ -18,7 +18,12 @@ const {
     IS_TEST,
     ADMINS_FILE,
     OWNER_ID,
-    ADDITIONAL_PAGES_FOR_LOAD
+    ADDITIONAL_PAGES_FOR_LOAD,
+    CONCURRENCY, 
+    REGUEST_INTERVAL_START, 
+    REGUEST_INTERVAL_END,
+    EMPTY_IMAGE_URL,
+    IMAGE_ENDPOINT
 } = require('./constants.js');
 
 const {
@@ -101,7 +106,9 @@ const {
     changeKeyboard,
     fetchData,
     getSecondPagesData,
-    executionTime
+    executionTime,
+    findNotExist,
+    randomNumber
 } = require('./helpers.js');
 
 
@@ -151,28 +158,7 @@ const bot = new TelegramBot(process.env.TOKEN, { polling: { interval: 1000, auto
 
 
 
-const findNotExist = (inputString) => {
 
-    let foundIndex = -1;
-
-    NOT_EXIST.forEach(word => {
-
-        const index = inputString.indexOf(word);
-
-        if (index !== -1) {
-
-            if (foundIndex === -1 || index < foundIndex) foundIndex = index; 
-        }
-    });
-
-    if (foundIndex !== -1) {
-
-        const resultString = inputString.substring(0, foundIndex);
-
-        return(resultString);
-
-    } else return(inputString);
-}
 
 function parseArr (arr){
     const parsedArr = []
@@ -183,9 +169,8 @@ function parseArr (arr){
         let newImages = []
 
         if(Array.isArray(short.images) && short.images.length > 0){
-            const partOfLink = "https://rms4.kufar.by/v1/gallery/"
 
-            for(let i=0 ; i < short.images.length; i++)newImages.push(partOfLink + short.images[i].path)
+            for(let i=0 ; i < short.images.length; i++) newImages.push(IMAGE_ENDPOINT + short.images[i].path)
 
             newImages = newImages.map((url, index) => ({
                 type: 'photo',
@@ -196,7 +181,7 @@ function parseArr (arr){
         } else{
             newImages = [{
                 type: 'photo',
-                media: "https://серебро.рф/img/placeholder.png",
+                media: EMPTY_IMAGE_URL,
                 caption: undefined
             }]
         }
@@ -214,7 +199,7 @@ function parseArr (arr){
             priceByn: parseInt(short.price_byn)/100,
             title:short.subject,
             link: short.ad_link,
-            description: findNotExist(short.body),
+            description: findNotExist(short.body, NOT_EXIST),
             time: short.list_time,
             img: newImages,
             id: short.ad_id
@@ -262,7 +247,7 @@ async function startMonitoring(){
 
             let firstTime = new Date().getTime()
 
-            newDataSecondsPages = await getSecondPagesData(newObjects)
+            newDataSecondsPages = await getSecondPagesData(newObjects, CONCURRENCY, REGUEST_INTERVAL_START, REGUEST_INTERVAL_END)
 
             oldDataFirstPage = newDataFirstPage
 
@@ -936,15 +921,11 @@ async function sendNotification() {
             for (let j = 0; j < linkArrForAlarms.length; j++) {
                 const ad = linkArrForAlarms[j];
 
-                const price = ad.priceByn === 0
-                    ? 'Договорная'
-                    : `${ad.priceByn} BYN`;
+                const price = ad.priceByn === 0 ? 'Договорная' : `${ad.priceByn} BYN`;
 
                 const randomEmoji = EMOJIES[Math.floor(Math.random() * EMOJIES.length)];
 
                 let messageString = `${ad.aiMark ? ad.aiMark + ' ' : ''}${randomEmoji} ${ad.title || ''}\n\nОписание: ${String(ad.description || '').slice(0, 500)}\n\nОбласть: ${ad.stateTxt || '-'} / Город: ${ad.townTxt || '-'}\nЦена: ${price}\nКатегория: ${ad.categoryTxt || '-'}\nСсылка: ${ad.link || ''}`;
-
-                // Telegram ограничивает подпись к фотографии 1024 символами.
                 messageString = messageString.slice(0, 1000);
 
                 const media = (ad.img || []).slice(0, 9);

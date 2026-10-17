@@ -20,24 +20,40 @@ async function fetchData(url, retries = 3) {
     }
 }
 
-async function getSecondPagesData(objects){
+async function getSecondPagesData(objects, CONCURRENCY, REGUEST_INTERVAL_START, REGUEST_INTERVAL_END){
+    let secondPageData = []
+    let nextIndex = 0
+    let nextStartTime = 0
+    
 
-    let secondPageData = [];
-    let url
-    try{
-        for (let i = 0; i < objects.length; i++) {
-            url = `https://api.kufar.by/search-api/v2/item/${objects[i].ad_id}/rendered`
-            const secondPageObj = await fetchData(url);
-            if(!secondPageObj || !secondPageObj.result) continue
+    const worker = async () => {
+        while(true){
+            const i = nextIndex++
+            if(i >= objects.length) return
 
-            secondPageData.push(secondPageObj.result);
-            await delay(100) 
+            const startAt = Math.max(Date.now(), nextStartTime)
+            nextStartTime = startAt + randomNumber(REGUEST_INTERVAL_START, REGUEST_INTERVAL_END)
 
+            const waitTime = startAt - Date.now()
+            if(waitTime > 0) await delay(waitTime)
+
+            const url = `https://api.kufar.by/search-api/v2/item/${objects[i].ad_id}/rendered`
+
+            try{
+                const secondPageObj = await fetchData(url)
+
+                if(secondPageObj?.result) secondPageData[i] = secondPageObj.result
+            } catch(error){
+                console.log(url, error.message)
+            }
         }
-    } catch(error){
-        console.log(url, error.message)
     }
-    return secondPageData;
+
+    await Promise.all(
+        Array.from({length: Math.min(CONCURRENCY, objects.length)}, () => worker())
+    )
+
+    return secondPageData.filter(Boolean)
 }
 
 
@@ -105,6 +121,32 @@ const executionTime = (firstTime)=>{
     return seconds
 }
 
+
+const findNotExist = (inputString, NOT_EXIST) => {
+
+    let foundIndex = -1;
+
+    NOT_EXIST.forEach(word => {
+
+        const index = inputString.indexOf(word);
+
+        if (index !== -1) {
+
+            if (foundIndex === -1 || index < foundIndex) foundIndex = index; 
+        }
+    });
+
+    if (foundIndex !== -1) {
+
+        const resultString = inputString.substring(0, foundIndex);
+
+        return(resultString);
+
+    } else return(inputString);
+}
+
+const randomNumber = (from, to) => Math.floor(Math.random() * (to - from + 1)) + from
+
 module.exports = {
     millisecOfTwoDates,
     delay,
@@ -114,5 +156,7 @@ module.exports = {
     changeKeyboard,
     fetchData,
     getSecondPagesData,
-    executionTime
+    executionTime,
+    findNotExist,
+    randomNumber
 };

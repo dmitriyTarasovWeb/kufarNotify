@@ -34,6 +34,13 @@ const ADMINS_FILE = path.join(DIRECTORY_PATH, 'admins.json')
 
 const IS_TEST = true;
 
+const CONCURRENCY = 7
+const REGUEST_INTERVAL_START = 80
+const REGUEST_INTERVAL_END = 120
+
+const EMPTY_IMAGE_URL = "https://серебро.рф/img/placeholder.png"
+
+const IMAGE_ENDPOINT = "https://rms4.kufar.by/v1/gallery/"
 
 module.exports = {
     API_PAGES_1_4,
@@ -50,5 +57,10 @@ module.exports = {
     CHECK_BAN_TIMEOUT,
     OWNER_ID,
     ADMINS_FILE,
-    ADDITIONAL_PAGES_FOR_LOAD
+    ADDITIONAL_PAGES_FOR_LOAD,
+    CONCURRENCY,
+    REGUEST_INTERVAL_START,
+    REGUEST_INTERVAL_END,
+    EMPTY_IMAGE_URL,
+    IMAGE_ENDPOINT
 };
