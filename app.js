@@ -357,31 +357,96 @@ bot.on('callback_query', (callbackQuery) => {
 
     if (action.startsWith('ai_')) {
         bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
-        if (action === 'ai_help') {
-            bot.sendMessage(chatId, '<b>Как получить Gemini API-ключ</b>\n\n1. Откройте <a href="https://aistudio.google.com/apikey">Google AI Studio — API keys</a>.\n2. Войдите в Google-аккаунт.\n3. Нажмите создание API-ключа (Create API key).\n4. Скопируйте ключ и отправьте его боту через кнопку «Добавить API-ключ».\n\nКлюч сначала проверяется тестовым запросом и сохраняется только при успешной проверке. Не отправляйте ключ посторонним.', { parse_mode: 'HTML', disable_web_page_preview: true });
-            return;
-        }
-        if (action === 'ai_locked') {
-            bot.sendMessage(chatId, 'Сначала добавьте действующий Gemini API-ключ.');
-            return;
-        }
-        if (action === 'ai_api') {
-            objectLink.aiInputMode = 'apiKey';
-            bot.sendMessage(chatId, 'Отправьте Gemini API-ключ одним сообщением. Сначала будет выполнен тестовый запрос. Если проверка не пройдёт, текущий ключ останется без изменений. Для отмены отправьте /cancel.');
-            return;
-        }
-        if (action === 'ai_prompt') {
-            if (!objectLink.aiApiKey) { bot.sendMessage(chatId, 'Сначала добавьте API-ключ.'); return; }
-            objectLink.aiInputMode = 'prompt';
-            bot.sendMessage(chatId, `Отправьте новый кастомный промпт одним сообщением. Он заменит пользовательскую часть промпта, а обязательные правила JSON-ответа останутся неизменными. Для возврата к промпту по умолчанию отправьте точку (.). Для отмены отправьте /cancel.
 
-Текущий промпт:
-${getAiPrompt(objectLink)}`);
+        if (action === 'ai_help') {
+            bot.sendMessage(chatId, '<b>Как получить Gemini API-ключ</b>\n\n1. Откройте <a href="https://aistudio.google.com/apikey">Google AI Studio — API keys</a>.\n2. Войдите в Google-аккаунт.\n3. Создайте API-ключ.\n4. Скопируйте его и отправьте боту через кнопку добавления токена.\n\nКлюч будет проверен тестовым запросом перед сохранением. Не отправляйте ключи посторонним.', { parse_mode: 'HTML', disable_web_page_preview: true });
             return;
         }
+
+        if (action === 'ai_locked') {
+            bot.sendMessage(chatId, 'Сначала добавьте действующий Gemini API-токен.');
+            return;
+        }
+
+        if (action === 'ai_max') {
+            bot.sendMessage(chatId, `Достигнут лимит в ${MAX_GEMINI_API_KEYS} токенов. Удалите ненужный токен в разделе управления, чтобы добавить новый.`);
+            return;
+        }
+
+        if (action === 'ai_api') {
+            if (getAiApiKeys(objectLink).length >= MAX_GEMINI_API_KEYS) {
+                bot.sendMessage(chatId, `Достигнут лимит в ${MAX_GEMINI_API_KEYS} токенов. Сначала удалите один из имеющихся.`);
+                return;
+            }
+
+            objectLink.aiInputMode = 'apiKey';
+            bot.sendMessage(chatId, `Отправьте Gemini API-токен одним сообщением. Он будет проверен тестовым запросом и добавлен в список только при успешной проверке.\n\nДобавлено токенов: ${getAiApiKeys(objectLink).length}/${MAX_GEMINI_API_KEYS}.\nДля отмены отправьте /cancel.`);
+            return;
+        }
+
+        if (action === 'ai_tokens') {
+            sendAiTokensPanel(chatId, objectLink, msg.message_id);
+            return;
+        }
+
+        if (action === 'ai_back') {
+            sendAiPanel(chatId, objectLink, msg.message_id);
+            return;
+        }
+
+        const deleteTokenMatch = action.match(/^ai_token_delete_(\d+)$/);
+
+        if (deleteTokenMatch) {
+            const tokenIndex = Number(deleteTokenMatch[1]);
+            const keys = getAiApiKeys(objectLink);
+
+            if (tokenIndex < 0 || tokenIndex >= keys.length) {
+                bot.sendMessage(chatId, 'Этот токен уже отсутствует.');
+                return;
+            }
+
+            const currentIndex = Number.isInteger(objectLink.aiCurrentKeyIndex) ? objectLink.aiCurrentKeyIndex : 0;
+
+            keys.splice(tokenIndex, 1);
+            objectLink.aiApiKeys = keys;
+            delete objectLink.aiApiKey;
+
+            if (keys.length === 0) {
+                objectLink.aiFilterEnabled = false;
+                objectLink.aiCurrentKeyIndex = 0;
+                objectLink.aiAutoDisabled = false;
+            } else if (currentIndex > tokenIndex) {
+                objectLink.aiCurrentKeyIndex = currentIndex - 1;
+            } else if (currentIndex >= keys.length) {
+                objectLink.aiCurrentKeyIndex = 0;
+            }
+
+            writeUpdatesToFile(objectLink, chatId);
+            sendAiTokensPanel(chatId, objectLink, msg.message_id);
+            return;
+        }
+
+        if (action === 'ai_prompt') {
+            if (!getAiApiKeys(objectLink).length) {
+                bot.sendMessage(chatId, 'Сначала добавьте API-токен.');
+                return;
+            }
+
+            objectLink.aiInputMode = 'prompt';
+            bot.sendMessage(chatId, `Отправьте новый кастомный промпт одним сообщением. Обязательные правила JSON-ответа останутся неизменными. Для возврата к промпту по умолчанию отправьте точку (.). Для отмены отправьте /cancel.\n\nТекущий промпт:\n${getAiPrompt(objectLink)}`);
+            return;
+        }
+
         if (action === 'ai_toggle') {
-            if (!objectLink.aiApiKey) { bot.sendMessage(chatId, 'Сначала добавьте API-ключ.'); return; }
+            if (!getAiApiKeys(objectLink).length) {
+                bot.sendMessage(chatId, 'Сначала добавьте API-токен.');
+                return;
+            }
+
             objectLink.aiFilterEnabled = !objectLink.aiFilterEnabled;
+
+            if (objectLink.aiFilterEnabled) objectLink.aiAutoDisabled = false;
+
             writeUpdatesToFile(objectLink, chatId);
             sendAiPanel(chatId, objectLink, msg.message_id);
             return;
@@ -462,9 +527,14 @@ const readDataFromFiles = () => {
                 if (parsedJson.timeOfExecution && parsedJson.timeOfExecution !== "-") parsedJson.timeOfExecution = new Date(parsedJson.timeOfExecution);
                 if (parsedJson.lastTimeBan && parsedJson.lastTimeBan !== 0) parsedJson.lastTimeBan = new Date(parsedJson.lastTimeBan);
                 const exemplar = new personalOptions(parsedJson.categoryTxt, parsedJson.category, parsedJson.subCategory, parsedJson.placeTxt, parsedJson.state, parsedJson.town, parsedJson.filters, parsedJson.arrForAlarms, parsedJson.statusText, parsedJson.timeOfExecution, parsedJson.bansCount, parsedJson.ban, parsedJson.lastTimeBan);
-                exemplar.aiApiKey = parsedJson.aiApiKey || '';
+                const savedAiApiKeys = Array.isArray(parsedJson.aiApiKeys) ? parsedJson.aiApiKeys : (parsedJson.aiApiKey ? [parsedJson.aiApiKey] : []);
+                exemplar.aiApiKeys = [...new Set(savedAiApiKeys.filter(key => typeof key === 'string').map(key => key.trim()).filter(Boolean))].slice(0, MAX_GEMINI_API_KEYS);
+                exemplar.aiCurrentKeyIndex = Number.isInteger(parsedJson.aiCurrentKeyIndex) ? parsedJson.aiCurrentKeyIndex : 0;
+                if (exemplar.aiCurrentKeyIndex < 0 || exemplar.aiCurrentKeyIndex >= exemplar.aiApiKeys.length) exemplar.aiCurrentKeyIndex = 0;
+                exemplar.aiAutoDisabled = Boolean(parsedJson.aiAutoDisabled);
+                delete exemplar.aiApiKey;
                 exemplar.aiCustomPrompt = parsedJson.aiCustomPrompt || '';
-                exemplar.aiFilterEnabled = Boolean(parsedJson.aiFilterEnabled && exemplar.aiApiKey);
+                exemplar.aiFilterEnabled = Boolean(parsedJson.aiFilterEnabled && exemplar.aiApiKeys.length);
                 chatIDS.push(Number(baseName));
                 classesExemplars.push({ [baseName]: exemplar });
             } catch(error) { console.error('Ошибка чтения пользовательского файла:', file, error.message); }
@@ -489,33 +559,86 @@ const findUserById = (id) => {
 const DEFAULT_AI_PROMPT = 'Отбирай только объявления, которые действительно соответствуют интересам пользователя. Учитывай название, описание, цену, категорию и локацию. Исключай нерелевантные объявления, дубликаты, услуги вместо товаров и объявления, в которых товар явно не соответствует запросу. Если сомневаешься, не включай объявление.';
 const GEMINI_MODEL = 'gemini-3.1-flash-lite';
 
-const getAiPrompt = (objectLink) => String(objectLink.aiCustomPrompt || DEFAULT_AI_PROMPT).trim();
+const getAiApiKeys = objectLink => {
+    if (Array.isArray(objectLink.aiApiKeys)) return objectLink.aiApiKeys;
+    return objectLink.aiApiKey ? [objectLink.aiApiKey] : [];
+};
 
-const getAiKeyboard = (objectLink) => {
-    const hasKey = Boolean(objectLink.aiApiKey);
+const getAiPrompt = objectLink => String(objectLink.aiCustomPrompt || DEFAULT_AI_PROMPT).trim();
+
+const maskAiApiKey = key => key.length <= 8 ? `${key.slice(0, 2)}…` : `${key.slice(0, 4)}…${key.slice(-4)}`;
+
+const getAiKeyboard = objectLink => {
+    const keys = getAiApiKeys(objectLink);
+    const hasKeys = keys.length > 0;
     const enabled = Boolean(objectLink.aiFilterEnabled);
-    const keyboard = [
-        [{ text: hasKey ? '🔑 Изменить API-ключ' : '🔑 Добавить API-ключ', callback_data: 'ai_api' }],
-        [{ text: 'ℹ️ Как получить API-ключ', callback_data: 'ai_help' }]
-    ];
-    if (hasKey) {
+    const keyboard = [];
+
+    if (keys.length < MAX_GEMINI_API_KEYS) {
+        keyboard.push([{ text: `➕ Добавить токен (${keys.length}/${MAX_GEMINI_API_KEYS})`, callback_data: 'ai_api' }]);
+    } else {
+        keyboard.push([{ text: `🔒 Лимит токенов (${keys.length}/${MAX_GEMINI_API_KEYS})`, callback_data: 'ai_max' }]);
+    }
+
+    keyboard.push([{ text: `🗂 Управление токенами (${keys.length})`, callback_data: 'ai_tokens' }]);
+    keyboard.push([{ text: 'ℹ️ Как получить API-ключ', callback_data: 'ai_help' }]);
+
+    if (hasKeys) {
         keyboard.push([{ text: '✍️ Изменить кастомный промпт', callback_data: 'ai_prompt' }]);
         keyboard.push([{ text: enabled ? '🔴 Выключить AI-фильтр' : '🟢 Включить AI-фильтр', callback_data: 'ai_toggle' }]);
     } else {
-        keyboard.push([{ text: '✍️ Кастомный промпт (нужен API-ключ)', callback_data: 'ai_locked' }]);
-        keyboard.push([{ text: '🔒 Включение фильтра (нужен API-ключ)', callback_data: 'ai_locked' }]);
+        keyboard.push([{ text: '✍️ Кастомный промпт (нужен токен)', callback_data: 'ai_locked' }]);
+        keyboard.push([{ text: '🔒 Включение фильтра (нужен токен)', callback_data: 'ai_locked' }]);
     }
+
     return { reply_markup: { inline_keyboard: keyboard } };
 };
 
-const sendAiPanel = (chatId, objectLink, messageId) => {
-    const hasKey = Boolean(objectLink.aiApiKey);
-    const status = !hasKey ? 'Не настроен — API-ключ не добавлен' : (objectLink.aiFilterEnabled ? 'Включён' : 'Выключен');
-    const promptStatus = objectLink.aiCustomPrompt ? 'Пользовательский промпт' : 'Промпт по умолчанию';
-    const text = `<b>AI-фильтр объявлений (Gemini)</b>\n\nСтатус: <b>${status}</b>\nПромпт: <b>${promptStatus}</b>\n\nGemini оценивает каждое объявление и возвращает решение с краткой причиной. В сообщениях будут отображаться ✅ или ❌ и объяснение решения, чтобы можно было проверять работу нейронки и корректировать промпт.`;
+const sendAiTokensPanel = (chatId, objectLink, messageId) => {
+    const keys = getAiApiKeys(objectLink);
+    const currentIndex = keys.length ? ((Number.isInteger(objectLink.aiCurrentKeyIndex) ? objectLink.aiCurrentKeyIndex : 0) % keys.length + keys.length) % keys.length : -1;
+
+    const text = `<b>Управление Gemini-токенами</b>\n\nДобавлено токенов: <b>${keys.length}/${MAX_GEMINI_API_KEYS}</b>\n\n${keys.length ? 'Нажмите на нужный токен, чтобы удалить его. Полные значения ключей не отображаются.' : 'Токены пока не добавлены.'}\n\n▶️ — токен, с которого начнётся следующий запрос.`;
+
+    const keyboard = keys.map((key, index) => [{
+        text: `${index === currentIndex ? '▶️ ' : ''}🗑 Удалить токен ${index + 1} (${maskAiApiKey(key)})`,
+        callback_data: `ai_token_delete_${index}`
+    }]);
+
+    if (keys.length < MAX_GEMINI_API_KEYS) keyboard.push([{ text: '➕ Добавить токен', callback_data: 'ai_api' }]);
+
+    keyboard.push([{ text: '⬅️ Назад к AI-фильтру', callback_data: 'ai_back' }]);
+
+    const options = { chat_id: chatId, parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } };
+
     if (messageId) {
-        bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', ...getAiKeyboard(objectLink) }).catch(() => bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) }));
-    } else bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) });
+        bot.editMessageText(text, { ...options, message_id: messageId }).catch(() => {
+            bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+        });
+    } else {
+        bot.sendMessage(chatId, text, { parse_mode: 'HTML', reply_markup: { inline_keyboard: keyboard } });
+    }
+};
+
+const sendAiPanel = (chatId, objectLink, messageId) => {
+    const keys = getAiApiKeys(objectLink);
+    const hasKeys = keys.length > 0;
+    const status = !hasKeys ? 'Не настроен — токены не добавлены' : (objectLink.aiFilterEnabled ? 'Включён' : 'Выключен');
+    const promptStatus = objectLink.aiCustomPrompt ? 'Пользовательский промпт' : 'Промпт по умолчанию';
+
+    const autoDisabledText = objectLink.aiAutoDisabled
+        ? '\n\n⚠️ <b>AI автоматически отключён:</b> все добавленные токены получили ошибки лимита. Когда лимиты восстановятся, включите фильтр вручную через /ai.'
+        : '';
+
+    const text = `<b>AI-фильтр объявлений (Gemini)</b>\n\nСтатус: <b>${status}</b>\nТокенов: <b>${keys.length}/${MAX_GEMINI_API_KEYS}</b>\nПромпт: <b>${promptStatus}</b>${autoDisabledText}\n\nGemini оценивает каждое объявление и возвращает решение с краткой причиной. В сообщениях отображаются ✅ или ❌ и объяснение решения, чтобы можно было проверять работу нейронки и корректировать промпт.`;
+
+    if (messageId) {
+        bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', ...getAiKeyboard(objectLink) }).catch(() => {
+            bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) });
+        });
+    } else {
+        bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) });
+    }
 };
 
 
@@ -561,7 +684,10 @@ const callGemini = async (apiKey, prompt, ads) => {
                 ? data.error.message
                 : `HTTP ${response.status}`;
 
-            throw new Error(`Gemini API ${response.status}: ${detail}`);
+            const error = new Error(`Gemini API ${response.status}: ${detail}`);
+            error.status = response.status;
+            error.geminiCode = data.error ? (data.error.status || data.error.code || '') : '';
+            throw error;
         }
 
         const candidate = data.candidates && data.candidates[0];
@@ -619,8 +745,23 @@ const testGeminiApiKey = async (apiKey) => {
     return true;
 };
 
-const filterAdsWithAi = async (objectLink, ads) => {
-    if (!objectLink.aiApiKey || !objectLink.aiFilterEnabled || !ads.length) return ads;
+const isGeminiQuotaError = error => {
+    const status = Number(error.status);
+    const errorText = `${error.geminiCode || ''} ${error.message || error}`;
+
+    return status === 429 || /RESOURCE_EXHAUSTED|quota[_\s-]?exceeded|rate[_\s-]?limit|too many requests/i.test(errorText);
+};
+
+const markAdsWithAiError = (ads, errorText) => ads.map(ad => ({
+    ...ad,
+    aiMark: '⚠️',
+    aiReason: errorText
+}));
+
+const filterAdsWithAi = async (objectLink, ads, chatId) => {
+    const apiKeys = getAiApiKeys(objectLink);
+
+    if (!apiKeys.length || !objectLink.aiFilterEnabled || !ads.length) return ads;
 
     const aiAds = ads.map((ad, index) => ({
         id: `ID_${index + 1}`,
@@ -633,30 +774,67 @@ const filterAdsWithAi = async (objectLink, ads) => {
         link: String(ad.link || '')
     }));
 
-    try {
-        const decisions = await callGemini(objectLink.aiApiKey, getAiPrompt(objectLink), aiAds);
-        const decisionsById = new Map(decisions.map(decision => [decision.id, decision]));
+    let startIndex = Number.isInteger(objectLink.aiCurrentKeyIndex) ? objectLink.aiCurrentKeyIndex : 0;
+    startIndex = ((startIndex % apiKeys.length) + apiKeys.length) % apiKeys.length;
 
-        return ads.map((ad, index) => {
-            const decision = decisionsById.get(`ID_${index + 1}`);
+    let quotaErrors = 0;
 
-            return {
-                ...ad,
-                aiMark: decision ? (decision.keep ? '✅' : '❌') : '⚠️',
-                aiReason: decision
-                    ? decision.reason
-                    : 'Gemini не вернул решение для этого объявления'
-            };
-        });
-    } catch(error) {
-        console.error('Ошибка AI-фильтра:', error.message);
+    for (let attempt = 0; attempt < apiKeys.length; attempt++) {
+        const keyIndex = (startIndex + attempt) % apiKeys.length;
 
-        return ads.map(ad => ({
-            ...ad,
-            aiMark: '⚠️',
-            aiReason: `Не удалось получить решение Gemini: ${String(error.message || error).replace(/\s+/g, ' ').slice(0, 180)}`
-        }));
+        try {
+            const decisions = await callGemini(apiKeys[keyIndex], getAiPrompt(objectLink), aiAds);
+            objectLink.aiCurrentKeyIndex = keyIndex;
+            writeUpdatesToFile(objectLink, chatId);
+
+            const decisionsById = new Map(decisions.map(decision => [decision.id, decision]));
+
+            return ads.map((ad, index) => {
+                const decision = decisionsById.get(`ID_${index + 1}`);
+
+                return {
+                    ...ad,
+                    aiMark: decision ? (decision.keep ? '✅' : '❌') : '⚠️',
+                    aiReason: decision
+                        ? decision.reason
+                        : 'Gemini не вернул решение для этого объявления'
+                };
+            });
+        } catch(error) {
+            console.error(`Ошибка Gemini с токеном ${keyIndex + 1}/${apiKeys.length}:`, error.message);
+
+            if (!isGeminiQuotaError(error)) {
+                return markAdsWithAiError(
+                    ads,
+                    `Не удалось получить решение Gemini: ${String(error.message || error).replace(/\s+/g, ' ').slice(0, 180)}`
+                );
+            }
+
+            quotaErrors++;
+            objectLink.aiCurrentKeyIndex = (keyIndex + 1) % apiKeys.length;
+            writeUpdatesToFile(objectLink, chatId);
+
+            console.log(`Лимит Gemini для токена ${keyIndex + 1}/${apiKeys.length}. Переключаюсь на следующий токен.`);
+        }
     }
+
+    if (quotaErrors === apiKeys.length) {
+        objectLink.aiFilterEnabled = false;
+        objectLink.aiAutoDisabled = true;
+        writeUpdatesToFile(objectLink, chatId);
+
+        const errorText = `Все ${apiKeys.length} токенов Gemini получили ошибки лимита. AI-фильтр отключён автоматически. Включите его вручную через /ai после восстановления лимитов.`;
+
+        bot.sendMessage(
+            chatId,
+            `⚠️ <b>AI-фильтр автоматически отключён.</b>\n\nВсе ${apiKeys.length} токенов Gemini получили ошибки лимита. Новые объявления продолжат приходить без AI-оценки.\n\nКогда лимиты восстановятся, откройте /ai и включите фильтр вручную.`,
+            { parse_mode: 'HTML' }
+        ).catch(error => console.error('Ошибка уведомления об отключении AI:', error.message));
+
+        return markAdsWithAiError(ads, errorText);
+    }
+
+    return ads;
 };
 
 const sendAdminHelp = (chatId) => bot.sendMessage(chatId, '<b>Админ-команды</b>\n/admin — статистика\n/admin users — список пользователей\n/admin filters ID — фильтры пользователя по Telegram ID\n/admin add ID — добавить администратора\n/admin remove ID — удалить администратора', { parse_mode: 'HTML' });
@@ -762,19 +940,52 @@ bot.on('message', async (message) => {
         objectLink.aiInputMode = '';
         if (inputMode === 'apiKey') {
             const apiKey = messageText.trim();
-            if (!apiKey || apiKey.length < 10) { bot.sendMessage(chatId, 'Похоже, это не API-ключ. Попробуйте снова через /ai.'); return; }
-            bot.sendMessage(chatId, 'Проверяю ключ тестовым запросом к Gemini…');
+            const currentKeys = getAiApiKeys(objectLink);
+
+            if (!apiKey || apiKey.length < 10) {
+                bot.sendMessage(chatId, 'Похоже, это не API-ключ. Попробуйте снова через /ai.');
+                return;
+            }
+
+            if (currentKeys.length >= MAX_GEMINI_API_KEYS) {
+                bot.sendMessage(chatId, `Достигнут лимит в ${MAX_GEMINI_API_KEYS} токенов. Удалите ненужный токен через /ai → управление токенами.`);
+                sendAiPanel(chatId, objectLink);
+                return;
+            }
+
+            if (currentKeys.includes(apiKey)) {
+                bot.sendMessage(chatId, 'Этот токен уже добавлен.');
+                sendAiPanel(chatId, objectLink);
+                return;
+            }
+
+            bot.sendMessage(chatId, 'Проверяю токен тестовым запросом к Gemini…');
+
             try {
                 await testGeminiApiKey(apiKey);
-                objectLink.aiApiKey = apiKey;
-                objectLink.aiFilterEnabled = false;
+
+                const hadKeys = currentKeys.length > 0;
+                objectLink.aiApiKeys = [...currentKeys, apiKey];
+                delete objectLink.aiApiKey;
+
+                if (!hadKeys) {
+                    objectLink.aiFilterEnabled = false;
+                    objectLink.aiCurrentKeyIndex = 0;
+                }
+
+                if (!Number.isInteger(objectLink.aiCurrentKeyIndex) || objectLink.aiCurrentKeyIndex < 0 || objectLink.aiCurrentKeyIndex >= objectLink.aiApiKeys.length) {
+                    objectLink.aiCurrentKeyIndex = 0;
+                }
+
                 writeUpdatesToFile(objectLink, chatId);
-                bot.sendMessage(chatId, '✅ API-ключ проверен и сохранён. AI-фильтр пока выключен — включите его в меню /ai.');
+
+                bot.sendMessage(chatId, `✅ Токен проверен и сохранён. Добавлено токенов: ${objectLink.aiApiKeys.length}/${MAX_GEMINI_API_KEYS}.\n\n${hadKeys ? 'Текущий статус AI-фильтра сохранён.' : 'AI-фильтр пока выключен — включите его через /ai.'}`);
                 sendAiPanel(chatId, objectLink);
             } catch(error) {
-                console.error('Ошибка проверки Gemini API-ключа:', error.message);
-                bot.sendMessage(chatId, `❌ Не удалось проверить API-ключ: ${String(error.message).slice(0, 500)}\nПроверьте ключ и доступность Gemini API, затем попробуйте снова через /ai.`);
+                console.error('Ошибка проверки Gemini API-токена:', error.message);
+                bot.sendMessage(chatId, `❌ Не удалось проверить токен: ${String(error.message).slice(0, 500)}\n\nПроверьте ключ и доступность Gemini API, затем попробуйте снова через /ai.`);
             }
+
             return;
         }
         if (inputMode === 'prompt') {
@@ -930,11 +1141,11 @@ async function sendNotification() {
 
             
         if (linkArrForAlarms.length > 0) {
-            if (objectLink.aiApiKey && objectLink.aiFilterEnabled) {
+            if (getAiApiKeys(objectLink).length > 0 && objectLink.aiFilterEnabled) {
                 const batchToFilter = linkArrForAlarms.slice();
                 objectLink.arrForAlarms = [];
                 aiQueueDetached = true;
-                linkArrForAlarms = await filterAdsWithAi(objectLink, batchToFilter);
+                linkArrForAlarms = await filterAdsWithAi(objectLink, batchToFilter, chatIDS[i]);
             }
 
             if (checkSpamAlarm(objectLink, chatIDS[i], linkArrForAlarms.length)) continue;
