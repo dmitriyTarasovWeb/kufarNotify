@@ -955,7 +955,7 @@ const testGeminiApiKey = async apiKey => {
         } catch (error) {
             lastError = error;
 
-            if (!isGeminiModelRetryError(error)) throw error;
+            if (!isGeminiModelRetryError(error) && !isGeminiQuotaError(error)) throw error;
 
             console.log(`Тест Gemini: модель ${model} не ответила (${getGeminiModelErrorText(error)}). Пробую следующую.`);
         }
@@ -993,7 +993,7 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
     let startModelIndex = Number.isInteger(objectLink.aiCurrentModelIndex) ? objectLink.aiCurrentModelIndex : 0;
     startModelIndex = ((startModelIndex % GEMINI_MODELS.length) + GEMINI_MODELS.length) % GEMINI_MODELS.length;
 
-    const quotaFailedKeys = new Set();
+    const quotaErrors = [];
     const modelErrors = [];
 
     for (let modelAttempt = 0; modelAttempt < GEMINI_MODELS.length; modelAttempt++) {
@@ -1004,7 +1004,6 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
         for (let keyAttempt = 0; keyAttempt < apiKeys.length; keyAttempt++) {
             const keyIndex = (startKeyIndex + keyAttempt) % apiKeys.length;
 
-            if (quotaFailedKeys.has(keyIndex)) continue;
 
             try {
                 const decisions = await callGemini(apiKeys[keyIndex], getAiPrompt(objectLink), aiAds, model);
@@ -1046,27 +1045,12 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
                 }
 
                 if (isGeminiQuotaError(error)) {
-                    quotaFailedKeys.add(keyIndex);
+                    quotaErrors.push({ model, keyIndex, error });
+
                     objectLink.aiCurrentKeyIndex = (keyIndex + 1) % apiKeys.length;
                     writeUpdatesToFile(objectLink, chatId);
 
-                    console.log(`Лимит Gemini для токена ${keyIndex + 1}/${apiKeys.length}. Переключаюсь на следующий токен.`);
-
-                    if (quotaFailedKeys.size >= apiKeys.length) {
-                        objectLink.aiFilterEnabled = false;
-                        objectLink.aiAutoDisabled = true;
-                        writeUpdatesToFile(objectLink, chatId);
-
-                        const errorText = `Все ${apiKeys.length} токенов Gemini получили ошибки лимита. AI-фильтр отключён автоматически. Включите его вручную через /ai после восстановления лимитов.`;
-
-                        bot.sendMessage(
-                            chatId,
-                            `⚠️ <b>AI-фильтр автоматически отключён.</b>\n\nВсе ${apiKeys.length} токенов Gemini получили ошибки лимита. Новые объявления продолжат приходить без AI-оценки.\n\nКогда лимиты восстановятся, откройте /ai и включите фильтр вручную.`,
-                            { parse_mode: 'HTML' }
-                        ).catch(error => console.error('Ошибка уведомления об отключении AI:', error.message));
-
-                        return markAdsWithAiError(ads, errorText);
-                    }
+                    console.log(`Лимит Gemini: модель ${model}, токен ${keyIndex + 1}/${apiKeys.length}. Переключаюсь на следующий токен.`);
 
                     continue;
                 }
@@ -1084,13 +1068,32 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
         }
     }
 
-    const triedModelsText = modelErrors.map(item => `${item.model}: ${getGeminiModelErrorText(item.error)}`).join('\n');
+    if (quotaErrors.length === GEMINI_MODELS.length * apiKeys.length) {
+        objectLink.aiFilterEnabled = false;
+        objectLink.aiAutoDisabled = true;
+        writeUpdatesToFile(objectLink, chatId);
+
+        const errorText = `Все ${GEMINI_MODELS.length} моделей и все ${apiKeys.length} токенов Gemini получили ошибки лимита. AI-фильтр отключён автоматически. Включите его вручную через /ai после восстановления лимитов.`;
+
+        bot.sendMessage(
+            chatId,
+            `⚠️ <b>AI-фильтр автоматически отключён.</b>\n\nПроверены все ${GEMINI_MODELS.length} моделей и все ${apiKeys.length} токенов. Каждая комбинация вернула ошибку лимита.\n\nНовые объявления продолжат приходить без AI-оценки. Когда лимиты восстановятся, откройте /ai и включите фильтр вручную.`,
+            { parse_mode: 'HTML' }
+        ).catch(error => console.error('Ошибка уведомления об отключении AI:', error.message));
+
+        return markAdsWithAiError(ads, errorText);
+    }
+
+    const triedModelsText = [
+        ...modelErrors.map(item => `${item.model}: ${getGeminiModelErrorText(item.error)}`),
+        ...quotaErrors.slice(0, 10).map(item => `${item.model}, токен ${item.keyIndex + 1}: ${getGeminiModelErrorText(item.error)}`)
+    ].join('\n') || 'Не удалось получить ответ от доступных моделей Gemini.';
 
     const finalErrorText = `Не удалось получить решение ни от одной модели Gemini.\n${triedModelsText}\nОбъявления отправлены без AI-оценки.`;
 
     bot.sendMessage(
         chatId,
-        `⚠️ <b>Gemini временно не смог обработать пачку объявлений.</b>\n\n${triedModelsText}\n\nВсе модели были проверены. Объявления будут отправлены без AI-оценки. AI-фильтр остаётся включённым и попробует снова при следующей пачке.`,
+        `⚠️ <b>Gemini временно не смог обработать пачку объявлений.</b>\n\n${triedModelsText}\n\nВсе доступные попытки завершены. Объявления будут отправлены без AI-оценки. AI-фильтр остаётся включённым и попробует снова при следующей пачке.`,
         { parse_mode: 'HTML' }
     ).catch(error => console.error('Ошибка уведомления об ошибке моделей Gemini:', error.message));
 
