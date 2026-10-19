@@ -154,7 +154,7 @@ let timer = 0
 const bot = new TelegramBot(process.env.TOKEN, { polling: { interval: 1000, autoStart: true } });
 
 
-
+const MAX_GEMINI_API_KEYS = 5;
 
 
 
@@ -211,7 +211,6 @@ function parseArr (arr){
 
 
 const getData = async () =>{
-    let firstTime = new Date().getTime()
     let currFetch = await fetchData(API_PAGES_1_4);
     let output = currFetch.ads
 
@@ -220,8 +219,6 @@ const getData = async () =>{
         currFetch = await fetchData(API_PAGE_TEMPLATE + currFetch.pagination.pages[4].token)
         output = mergeArrays(output, currFetch.ads)
     }
-
-    console.log(executionTime(firstTime) + " получение данных")
 
     return output
 }
@@ -515,7 +512,7 @@ const sendAiPanel = (chatId, objectLink, messageId) => {
     const hasKey = Boolean(objectLink.aiApiKey);
     const status = !hasKey ? 'Не настроен — API-ключ не добавлен' : (objectLink.aiFilterEnabled ? 'Включён' : 'Выключен');
     const promptStatus = objectLink.aiCustomPrompt ? 'Пользовательский промпт' : 'Промпт по умолчанию';
-    const text = `<b>AI-фильтр объявлений (Gemini)</b>\n\nСтатус: <b>${status}</b>\nПромпт: <b>${promptStatus}</b>\n\nКогда появляется пачка подходящих объявлений, Gemini получает данные объявлений и возвращает ID тех, которые нужно отправить. Остальные объявления не отправляются.`;
+    const text = `<b>AI-фильтр объявлений (Gemini)</b>\n\nСтатус: <b>${status}</b>\nПромпт: <b>${promptStatus}</b>\n\nGemini оценивает каждое объявление и возвращает решение с краткой причиной. В сообщениях будут отображаться ✅ или ❌ и объяснение решения, чтобы можно было проверять работу нейронки и корректировать промпт.`;
     if (messageId) {
         bot.editMessageText(text, { chat_id: chatId, message_id: messageId, parse_mode: 'HTML', ...getAiKeyboard(objectLink) }).catch(() => bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) }));
     } else bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) });
@@ -523,12 +520,13 @@ const sendAiPanel = (chatId, objectLink, messageId) => {
 
 
 const callGemini = async (apiKey, prompt, ads) => {
+    
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
 
-    const systemPrompt = `${prompt}\n\nТЕХНИЧЕСКИЕ ПРАВИЛА ОТВЕТА (обязательны):\n1. Выбери объявления, которые нужно оставить для отправки пользователю.\n2. Используй только id из входного списка, не придумывай и не изменяй ID.\n3. Ответь строго валидным JSON без Markdown, пояснений и текста вокруг. Формат ровно такой: {"keep_ids":["ID_1","ID_2"]}.\n4. Если подходящих объявлений нет, верни {"keep_ids":[]}.\n5. ID в JSON всегда передавай строками.`;
-
+    const systemPrompt = `${prompt}\n\nОБЯЗАТЕЛЬНЫЕ ТЕХНИЧЕСКИЕ ПРАВИЛА ОТВЕТА:\n1. Оцени каждое объявление отдельно и реши, соответствует ли оно интересам пользователя и заданному промпту.\n2. Используй только ID из входного списка. Не придумывай, не изменяй и не переставляй ID между объявлениями.\n3.!!! ВНИМАТЕЛЬНО Верни строго валидный JSON без Markdown, пояснений и текста вокруг. Формат РОВНО такой!!!: {"decisions":[{"id":"ID_1","keep":true,"reason":"Краткая причина решения"}]}.\n4. Верни ровно одно решение для каждого входного объявления. Не пропускай объявления.\n5. Поле keep должно быть true, если объявление подходит и его следует оставить, или false, если оно не подходит.\n6. В поле reason напиши короткое объяснение решения на русском языке, желательно одним предложением и не длиннее 160 символов.\n7. Если keep=true, объясни, какие признаки объявления соответствуют запросу пользователя. Если keep=false, объясни конкретную причину несоответствия.\n8. Основывай причину на фактах из названия, описания, цены, категории и локации объявления, а также на условиях промпта. Не выдумывай отсутствующие факты.\n9. Не добавляй длинные рассуждения. Нужна только краткая причина, понятная пользователю и полезная для корректировки промпта.\n10. Если данных недостаточно, прямо укажи это в причине вместо догадок.\n11. Если входной список пуст, верни {"decisions":[]}.\n12. ID всегда должны быть строками, поле keep — логическим значением, поле reason — строкой.`;
+    let firstTime = new Date().getTime()
     try {
         const response = await fetch(url, {
             method: 'POST',
@@ -550,7 +548,7 @@ const callGemini = async (apiKey, prompt, ads) => {
                 generationConfig: {
                     responseMimeType: 'application/json',
                     thinkingConfig: {
-                        thinkingLevel: 'low'
+                        thinkingLevel: 'high'
                     }
                 }
             })
@@ -590,11 +588,19 @@ const callGemini = async (apiKey, prompt, ads) => {
             throw new Error(`Gemini вернул некорректный JSON: ${answer.slice(0, 200)}`);
         }
 
-        if (!parsed || !Array.isArray(parsed.keep_ids)) {
-            throw new Error('В JSON отсутствует массив keep_ids');
+        if (!parsed || !Array.isArray(parsed.decisions)) {
+            throw new Error('В JSON отсутствует массив decisions');
         }
 
-        return parsed.keep_ids.map(id => String(id));
+        return parsed.decisions
+            .filter(decision => decision && typeof decision.id === 'string' && typeof decision.keep === 'boolean')
+            .map(decision => ({
+                id: decision.id,
+                keep: decision.keep,
+                reason: typeof decision.reason === 'string' && decision.reason.trim()
+                    ? decision.reason.trim().replace(/\s+/g, ' ').slice(0, 300)
+                    : 'Gemini не указал причину решения'
+            }));
     } catch(error) {
         if (error.name === 'AbortError') {
             throw new Error('Тайм-аут Gemini: ответ не получен за 20 секунд');
@@ -603,12 +609,13 @@ const callGemini = async (apiKey, prompt, ads) => {
         throw error;
     } finally {
         clearTimeout(timeout);
+        console.log("время выполнения запроса к Gemini - " + executionTime(firstTime) + " количество " + ads.length)
     }
 };
 
 
 const testGeminiApiKey = async (apiKey) => {
-    await callGemini(apiKey, 'Ответь корректным JSON в формате {"keep_ids":[]}. Это проверка доступности API.', []);
+    await callGemini(apiKey, 'Это проверка доступности API. Верни пустой массив решений в обязательном JSON-формате.', []);
     return true;
 };
 
@@ -627,14 +634,28 @@ const filterAdsWithAi = async (objectLink, ads) => {
     }));
 
     try {
-        const keepIds = new Set(await callGemini(objectLink.aiApiKey, getAiPrompt(objectLink), aiAds));
+        const decisions = await callGemini(objectLink.aiApiKey, getAiPrompt(objectLink), aiAds);
+        const decisionsById = new Map(decisions.map(decision => [decision.id, decision]));
 
-        return ads.map((ad, index) => ({
-            ...ad,
-            aiMark: keepIds.has(`ID_${index + 1}`) ? '✅' : '❌'
-        }));
+        return ads.map((ad, index) => {
+            const decision = decisionsById.get(`ID_${index + 1}`);
+
+            return {
+                ...ad,
+                aiMark: decision ? (decision.keep ? '✅' : '❌') : '⚠️',
+                aiReason: decision
+                    ? decision.reason
+                    : 'Gemini не вернул решение для этого объявления'
+            };
+        });
     } catch(error) {
-        return ads.map(ad => ({ ...ad, aiMark: '⚠️' }));
+        console.error('Ошибка AI-фильтра:', error.message);
+
+        return ads.map(ad => ({
+            ...ad,
+            aiMark: '⚠️',
+            aiReason: `Не удалось получить решение Gemini: ${String(error.message || error).replace(/\s+/g, ' ').slice(0, 180)}`
+        }));
     }
 };
 
@@ -925,7 +946,11 @@ async function sendNotification() {
 
                 const randomEmoji = EMOJIES[Math.floor(Math.random() * EMOJIES.length)];
 
-                let messageString = `${ad.aiMark ? ad.aiMark + ' ' : ''}${randomEmoji} ${ad.title || ''}\n\nОписание: ${String(ad.description || '').slice(0, 500)}\n\nОбласть: ${ad.stateTxt || '-'} / Город: ${ad.townTxt || '-'}\nЦена: ${price}\nКатегория: ${ad.categoryTxt || '-'}\nСсылка: ${ad.link || ''}`;
+                const aiInfo = ad.aiMark
+                    ? `Решение AI: ${ad.aiMark}\nПочему: ${ad.aiReason || 'Причина не указана'}\n\n`
+                    : '';
+
+                let messageString = `${aiInfo}${randomEmoji} ${ad.title || ''}\n\nОписание: ${String(ad.description || '').slice(0, 500)}\n\nОбласть: ${ad.stateTxt || '-'} / Город: ${ad.townTxt || '-'}\nЦена: ${price}\nКатегория: ${ad.categoryTxt || '-'}\nСсылка: ${ad.link || ''}`;
                 messageString = messageString.slice(0, 1000);
 
                 const media = (ad.img || []).slice(0, 9);

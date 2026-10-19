@@ -1,22 +1,18 @@
-async function fetchData(url, retries = 3) {
+async function fetchData(url) {
+    while(true) {
+        try {
+            const response = await fetch(url, {method: 'GET'})
 
-    try {
-        const response = await fetch(url, {method: 'GET',});
+            if (!response.ok) {
+                if (response.status === 404) return false
+                throw new Error('Network response was not ok: ' + response.status)
+            }
 
-        if (!response.ok) {
-            if (response.status === 404) return false;
-            console.log(response.status)
-            throw new Error('Network response was not ok.');
+            return await response.json()
+        } catch (error) {
+            console.log("ОШИБКА ПРИ ПОЛУЧЕНИИ ОБЪЕКТА: " + error.message, url)
+            await delay(1000)
         }
-        const data = await response.json();
-
-        return data;
-    } catch (error) {
-
-        console.log("ОШИБКА ПРИ ПОЛУЧЕНИИ ОБЬЕКТА" + error.message, url);
-        if (retries <= 0) return false;
-        await delay(5000);
-        return await fetchData(url, retries - 1);
     }
 }
 

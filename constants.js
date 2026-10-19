@@ -34,9 +34,9 @@ const ADMINS_FILE = path.join(DIRECTORY_PATH, 'admins.json')
 
 const IS_TEST = true;
 
-const CONCURRENCY = 7
-const REGUEST_INTERVAL_START = 80
-const REGUEST_INTERVAL_END = 120
+const CONCURRENCY = 6
+const REGUEST_INTERVAL_START = 90
+const REGUEST_INTERVAL_END = 110
 
 const EMPTY_IMAGE_URL = "https://серебро.рф/img/placeholder.png"
 
