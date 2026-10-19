@@ -1,5 +1,7 @@
 require('dotenv').config();
 
+const secondBotAudit = require('./secondBot.js');
+
 const http = require('http');
 
 const PORT = process.env.PORT || 10000;
@@ -161,7 +163,6 @@ const GEMINI_MODELS = [
     'gemini-3.7-flash',
     'gemini-3.6-flash',
     'gemini-3-flash-preview',
-    'gemini-2.5-flash-lite',
     'gemini-2.5-flash'
 ];
 
@@ -371,6 +372,25 @@ bot.on('callback_query', (callbackQuery) => {
 
     if (action.startsWith('ai_')) {
         bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
+
+        if (action === 'ai_audit_help') {
+            secondBotAudit.getBotLink()
+                .then(auditBotUrl => bot.sendMessage(
+                    chatId,
+                    '<b>Как сделать комфортнее проверку отсеивания обьявлений</b>\n\nПодключите отдельного бота для аудита AI: он будет присылать все объявления, прошедшие ваши обычные фильтры по категории, цене, тегам и локации, даже те, которые нейронка отклонила.\n\nНастройка отправки неподходящих объявлений в основном боте на аудит не влияет. Решение Gemini повторно запрашиваться не будет. Если AI выключен или произошла ошибка, это будет отмечено в сообщении.\n\nПосле перехода нажмите /start. Чтобы не отвлекаться, откройте настройки уведомлений второго бота в Telegram и отключите их — сообщения останутся в истории чата. В самом основном боте ничего менять не нужно.',
+                    {
+                        parse_mode: 'HTML',
+                        reply_markup: {
+                            inline_keyboard: [[{ text: '🔎 Открыть бота для аудита', url: auditBotUrl }]]
+                        }
+                    }
+                ))
+                .catch(error => {
+                    console.error('Ошибка получения ссылки на аудит-бота:', error.message);
+                    bot.sendMessage(chatId, 'Не удалось получить ссылку на аудит-бота. Проверьте TOKEN_2 в файле .env и доступность второго бота.');
+                });
+            return;
+        }
 
         if (action === 'ai_help') {
             bot.sendMessage(chatId, '<b>Как получить Gemini API-ключ</b>\n\n1. Откройте <a href="https://aistudio.google.com/apikey">Google AI Studio — API keys</a>.\n2. Войдите в Google-аккаунт.\n3. Создайте API-ключ.\n4. Скопируйте его и отправьте боту через кнопку добавления токена.\n\nКлюч будет проверен тестовым запросом перед сохранением. Не отправляйте ключи посторонним.', { parse_mode: 'HTML', disable_web_page_preview: true });
@@ -701,6 +721,7 @@ const getAiKeyboard = objectLink => {
 
     keyboard.push([{ text: `🗂 Управление токенами (${keys.length})`, callback_data: 'ai_tokens' }]);
     keyboard.push([{ text: 'ℹ️ Как получить API-ключ', callback_data: 'ai_help' }]);
+    keyboard.push([{ text: '✨ Как сделать комфортнее проверку отсеивания обьявлений', callback_data: 'ai_audit_help' }]);
 
     if (hasKeys) {
         keyboard.push([{ text: '✍️ Изменить кастомный промпт', callback_data: 'ai_prompt' }]);
@@ -1503,17 +1524,22 @@ async function sendNotification() {
             let aiQueueDetached = false;
 
             if (linkArrForAlarms.length > 0) {
-                if (getAiApiKeys(objectLink).length > 0 && objectLink.aiFilterEnabled) {
+                const aiWasActive = getAiApiKeys(objectLink).length > 0 && objectLink.aiFilterEnabled;
+
+                if (aiWasActive) {
                     const batchToFilter = linkArrForAlarms.slice();
 
                     objectLink.arrForAlarms = [];
                     aiQueueDetached = true;
 
                     linkArrForAlarms = await filterAdsWithAi(objectLink, batchToFilter, chatIDS[i]);
+                }
 
-                    if (!getAiSendRejected(objectLink)) {
-                        linkArrForAlarms = linkArrForAlarms.filter(ad => ad.aiMark !== '❌');
-                    }
+                secondBotAudit.sendAuditBatch(chatIDS[i], linkArrForAlarms)
+                    .catch(error => console.error('Ошибка отправки пачки в аудит-бот:', error.message));
+
+                if (aiWasActive && !getAiSendRejected(objectLink)) {
+                    linkArrForAlarms = linkArrForAlarms.filter(ad => ad.aiMark !== '❌');
                 }
 
                 if (checkSpamAlarm(objectLink, chatIDS[i], linkArrForAlarms.length)) continue;
