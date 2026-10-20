@@ -3,6 +3,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
+const details = require('./details.js');
 
 const {
     DIRECTORY_PATH,
@@ -144,7 +145,7 @@ const formatAdMessage = ad => {
     let aiInfo = '';
 
     if (ad.aiError) {
-        aiInfo = `⚠️ Ошибка AI: ${String(ad.aiReason || 'Не удалось получить решение Gemini').slice(0, 300)}\n\n`;
+        aiInfo = '⚠️ Ошибка AI — подробный отчёт доступен по кнопке ниже.\n\n';
     } else if (ad.aiMark) {
         aiInfo = `Решение AI: ${ad.aiMark}\nПочему: ${String(ad.aiReason || 'Причина не указана').slice(0, 300)}\n\n`;
     } else {
@@ -163,20 +164,23 @@ const formatAdMessage = ad => {
 const sendAuditAd = async (chatId, ad) => {
     const message = formatAdMessage(ad);
     const media = (Array.isArray(ad.img) ? ad.img : []).slice(0, 9);
+    const reportButton = ad.aiError ? details.getReportButton(chatId, ad.aiReportId) : null;
+    const reportMarkup = reportButton ? { inline_keyboard: [[reportButton]] } : undefined;
+    const messageOptions = reportMarkup ? { reply_markup: reportMarkup } : {};
 
     if (!bot) return;
 
     if (media.length === 0) {
-        await sendText(chatId, message);
+        await sendText(chatId, message, messageOptions);
         return;
     }
 
     if (media.length === 1) {
         try {
-            await sendGloballyLimited(() => bot.sendPhoto(chatId, media[0].media || EMPTY_IMAGE_URL, { caption: message }));
+            await sendGloballyLimited(() => bot.sendPhoto(chatId, media[0].media || EMPTY_IMAGE_URL, { caption: message, ...messageOptions }));
         } catch (error) {
             console.error('Ошибка фото в аудит-боте, отправляю текст:', error.message);
-            await sendText(chatId, message);
+            await sendText(chatId, message, messageOptions);
         }
 
         return;
@@ -189,10 +193,16 @@ const sendAuditAd = async (chatId, ad) => {
     }));
 
     try {
-        await sendGloballyLimited(() => bot.sendMediaGroup(chatId, mediaGroup));
+        const sentMessages = await sendGloballyLimited(() => bot.sendMediaGroup(chatId, mediaGroup));
+        if (reportMarkup) {
+            await sendText(chatId, '⚠️ Ошибка AI — подробный отчёт:', {
+                ...messageOptions,
+                ...(Array.isArray(sentMessages) && sentMessages[0] ? { reply_to_message_id: sentMessages[0].message_id } : {})
+            });
+        }
     } catch (error) {
         console.error('Ошибка альбома в аудит-боте, отправляю текст:', error.message);
-        await sendText(chatId, message);
+        await sendText(chatId, message, messageOptions);
     }
 };
 
@@ -272,6 +282,22 @@ const sendAuditBatch = (chatId, ads) => {
 };
 
 if (bot) {
+    bot.on('callback_query', async callbackQuery => {
+        const match = String(callbackQuery.data || '').match(/^ai_report_([a-f0-9]{40})$/i);
+        if (!match) return;
+
+        const chatId = callbackQuery.message && callbackQuery.message.chat ? callbackQuery.message.chat.id : null;
+        await bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
+        const event = details.getEvent(match[1]);
+        if (!event || String(event.chatId) !== String(chatId)) {
+            if (chatId !== null) await bot.sendMessage(chatId, 'Подробный отчёт не найден. Возможно, запись отсутствует в журнале.');
+            return;
+        }
+
+        await bot.sendMessage(chatId, details.renderTelegramEventText(event))
+            .catch(error => console.error('Ошибка показа подробного AI-отчёта:', error.message));
+    });
+
     bot.on('message', async message => {
         const chatId = message.chat.id;
         const text = String(message.text || '').trim();

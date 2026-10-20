@@ -1,17 +1,9 @@
 require('dotenv').config();
 
 const secondBotAudit = require('./secondBot.js');
-
+const details = require('./details.js');
 const http = require('http');
-
 const PORT = process.env.PORT || 10000;
-
-http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('OK');
-}).listen(PORT, '0.0.0.0', () => {
-    console.log(`HTTP-сервер запущен на порту ${PORT}`);
-});
 
 const {
     API_PAGES_1_4,
@@ -145,6 +137,21 @@ const fs = require('fs');
 const path = require('path');
 const TelegramBot = require('node-telegram-bot-api');
 const { addUncaughtExceptionCaptureCallback } = require('process');
+
+details.initialize({
+    directoryPath: DIRECTORY_PATH,
+    reportDirectory: process.env.AI_REPORT_DIR || undefined,
+    baseUrl: process.env.AI_REPORT_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || '',
+    timezone: process.env.AI_REPORT_TIMEZONE || 'Europe/Minsk'
+});
+
+http.createServer((req, res) => {
+    if (details.handleHttpRequest(req, res)) return;
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('OK');
+}).listen(PORT, '0.0.0.0', () => {
+    console.log(`HTTP-сервер запущен на порту ${PORT}`);
+});
 
 const classesExemplars = [];
 const chatIDS = [];
@@ -371,6 +378,22 @@ bot.on('callback_query', (callbackQuery) => {
 
     if (action.startsWith('ai_')) {
         bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
+
+        if (action === 'ai_weekly_report') {
+            sendAiWeeklyReport(chatId).catch(error => console.error('Ошибка отправки AI-отчёта:', error.message));
+            return;
+        }
+
+        const adReportMatch = action.match(/^ai_report_([a-f0-9]{40})$/i);
+        if (adReportMatch) {
+            const reportEvent = details.getEvent(adReportMatch[1]);
+            if (!reportEvent || String(reportEvent.chatId) !== String(chatId)) {
+                bot.sendMessage(chatId, 'Подробный отчёт не найден. Возможно, запись отсутствует в журнале.');
+            } else {
+                bot.sendMessage(chatId, details.renderTelegramEventText(reportEvent));
+            }
+            return;
+        }
 
         if (action === 'ai_audit_help') {
             secondBotAudit.getBotLink()
@@ -748,6 +771,8 @@ const getAiKeyboard = objectLink => {
         keyboard.push([{ text: '🔒 Включение фильтра (нужен токен)', callback_data: 'ai_locked' }]);
     }
 
+    keyboard.push([{ text: '📊 Отчёт о работе AI за последнюю неделю', callback_data: 'ai_weekly_report' }]);
+
     return { reply_markup: { inline_keyboard: keyboard } };
 };
 
@@ -805,8 +830,8 @@ const sendAiPanel = (chatId, objectLink, messageId) => {
     const explanationText = !hasKeys
         ? 'Добавьте API-токен, чтобы включить AI-фильтр.'
         : (getAiShowExplanations(objectLink)
-            ? 'В сообщениях будут отображаться решение AI и объяснение.'
-            : 'Пояснения AI отключены. Ошибки AI по-прежнему будут показываться в объявлениях.');
+            ? 'В объявлениях будут отображаться решение AI и краткое объяснение. Ошибки открываются по кнопке отчёта.'
+            : 'Пояснения к решениям отключены. Ошибки по-прежнему отмечаются кратко с кнопкой подробного отчёта.');
 
     const text = `<b>AI-фильтр объявлений (Gemini)</b>\n\nСтатус: <b>${status}</b>\nТокенов: <b>${keys.length}/${MAX_GEMINI_API_KEYS}</b>\nПромпт: <b>${promptStatus}</b>${rejectedStatus}${explanationsStatus}${autoDisabledText}\n\n${explanationText}`;
 
@@ -816,6 +841,27 @@ const sendAiPanel = (chatId, objectLink, messageId) => {
         });
     } else {
         bot.sendMessage(chatId, text, { parse_mode: 'HTML', ...getAiKeyboard(objectLink) });
+    }
+};
+
+const sendAiWeeklyReport = async chatId => {
+    try {
+        const report = details.createWeeklyReportLink(chatId);
+        const summary = report.summary;
+        await bot.sendMessage(
+            chatId,
+            `📊 <b>Отчёт о работе AI за последнюю неделю</b>\n\nОбработано: <b>${summary.total}</b>\n✅ Принято: <b>${summary.accepted}</b>\n↘ Отклонено: <b>${summary.rejected}</b>\n🔴 Ошибки: <b>${summary.errors}</b>\n🔵 Уведомления: <b>${summary.notices}</b>\n\nНажмите кнопку ниже, чтобы открыть интерактивный HTML-отчёт в браузере. Файл скачивать не нужно. Ссылка действует 24 часа.`,
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    inline_keyboard: [[{ text: '🌐 Открыть отчёт в браузере', url: report.url }]]
+                },
+                disable_web_page_preview: true
+            }
+        );
+    } catch (error) {
+        console.error('Ошибка формирования ссылки на недельный AI-отчёт:', error.message);
+        await bot.sendMessage(chatId, `Не удалось открыть HTML-отчёт. ${error.message || 'Проверьте настройки публичного HTTPS-адреса.'}`);
     }
 };
 
@@ -964,11 +1010,12 @@ const testGeminiApiKey = async apiKey => {
     throw lastError || new Error('Не удалось проверить доступность моделей Gemini');
 };
 
-const markAdsWithAiError = (ads, errorText) => ads.map(ad => ({
+const markAdsWithAiError = (ads, errorText, errorInfo = {}) => ads.map(ad => ({
     ...ad,
     aiMark: '⚠️',
     aiReason: errorText,
-    aiError: true
+    aiError: true,
+    aiErrorCode: errorInfo.code || details.classifyError(errorInfo.error || errorText)
 }));
 
 const filterAdsWithAi = async (objectLink, ads, chatId) => {
@@ -1013,13 +1060,23 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
                 objectLink.aiCurrentModelIndex = modelIndex;
                 writeUpdatesToFile(objectLink, chatId);
 
-                if (modelErrors.length > 0) {
-                    const previousError = modelErrors[0];
+                if (modelErrors.length > 0 || quotaErrors.length > 0) {
+                    const recoveredFrom = [
+                        ...modelErrors.map(item => `${item.model}: ${getGeminiModelErrorText(item.error)}`),
+                        ...quotaErrors.slice(0, 10).map(item => `${item.model}, токен ${item.keyIndex + 1}: ${getGeminiModelErrorText(item.error)}`)
+                    ].join('\n') || 'Gemini выполнил повторную попытку.';
 
-                    bot.sendMessage(
-                        chatId,
-                        `ℹ️ Gemini успешно обработал объявления после переключения модели.\n\nПредыдущая модель: ${previousError.model}\nПричина переключения: ${getGeminiModelErrorText(previousError.error)}\nНовая модель: ${model}\n\nЭта модель будет использоваться для следующих запросов.`
-                    ).catch(error => console.error('Ошибка уведомления о смене Gemini-модели:', error.message));
+                    details.recordNotice(chatId, {
+                        code: 'AI_MODEL_FALLBACK',
+                        title: 'Gemini успешно обошёл ошибку',
+                        message: `После повторных попыток объявления обработаны успешно.\n\nНовая модель: ${model}\n\nПредыдущие ошибки:\n${recoveredFrom}`,
+                        model,
+                        metadata: {
+                            attemptedModelErrors: modelErrors.length,
+                            attemptedQuotaErrors: quotaErrors.length,
+                            previousModel: modelErrors[0] ? modelErrors[0].model : model
+                        }
+                    });
                 }
 
                 return ads.map((ad, index) => {
@@ -1032,7 +1089,9 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
                             ? decision.reason
                             : 'Gemini не вернул решение для этого объявления',
                         aiError: !decision,
-                        aiKeep: decision ? decision.keep : null
+                        aiErrorCode: decision ? '' : 'AI_MISSING_DECISION',
+                        aiKeep: decision ? decision.keep : null,
+                        aiModel: model
                     };
                 });
             } catch (error) {
@@ -1057,7 +1116,8 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
 
                 return markAdsWithAiError(
                     ads,
-                    `Не удалось получить решение Gemini: ${String(error.message || error).replace(/\s+/g, ' ').slice(0, 180)}`
+                    `Не удалось получить решение Gemini: ${String(error.message || error).replace(/\s+/g, ' ').slice(0, 180)}`,
+                    { code: details.classifyError(error), error }
                 );
             }
         }
@@ -1075,13 +1135,14 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
 
         const errorText = `Все ${GEMINI_MODELS.length} моделей и все ${apiKeys.length} токенов Gemini получили ошибки лимита. AI-фильтр отключён автоматически. Включите его вручную через /ai после восстановления лимитов.`;
 
-        bot.sendMessage(
-            chatId,
-            `⚠️ <b>AI-фильтр автоматически отключён.</b>\n\nПроверены все ${GEMINI_MODELS.length} моделей и все ${apiKeys.length} токенов. Каждая комбинация вернула ошибку лимита.\n\nНовые объявления продолжат приходить без AI-оценки. Когда лимиты восстановятся, откройте /ai и включите фильтр вручную.`,
-            { parse_mode: 'HTML' }
-        ).catch(error => console.error('Ошибка уведомления об отключении AI:', error.message));
+        details.recordNotice(chatId, {
+            code: 'AI_AUTO_DISABLED',
+            title: 'AI автоматически отключён из-за исчерпания квот',
+            message: `Проверены ${GEMINI_MODELS.length} моделей и ${apiKeys.length} токенов; все попытки вернули ошибку лимита. Новые объявления будут проходить без AI-оценки, пока фильтр не будет включён вручную через /ai.\n\n${quotaErrors.slice(0, 12).map(item => `${item.model}, токен ${item.keyIndex + 1}: ${getGeminiModelErrorText(item.error)}`).join('\n')}`,
+            metadata: { modelsTried: GEMINI_MODELS.length, keysTried: apiKeys.length }
+        });
 
-        return markAdsWithAiError(ads, errorText);
+        return markAdsWithAiError(ads, errorText, { code: 'AI_RATE_LIMIT' });
     }
 
     const triedModelsText = [
@@ -1091,13 +1152,14 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
 
     const finalErrorText = `Не удалось получить решение ни от одной модели Gemini.\n${triedModelsText}\nОбъявления отправлены без AI-оценки.`;
 
-    bot.sendMessage(
-        chatId,
-        `⚠️ <b>Gemini временно не смог обработать пачку объявлений.</b>\n\n${triedModelsText}\n\nВсе доступные попытки завершены. Объявления будут отправлены без AI-оценки. AI-фильтр остаётся включённым и попробует снова при следующей пачке.`,
-        { parse_mode: 'HTML' }
-    ).catch(error => console.error('Ошибка уведомления об ошибке моделей Gemini:', error.message));
+    details.recordNotice(chatId, {
+        code: 'AI_RETRY_SUMMARY',
+        title: 'Gemini не смог обработать пачку после повторных попыток',
+        message: `${triedModelsText}\n\nВсе доступные попытки завершены. Объявления отправлены без AI-оценки; фильтр остаётся включённым и повторит попытку при следующей пачке.`,
+        metadata: { modelErrors: modelErrors.length, quotaErrors: quotaErrors.length }
+    });
 
-    return markAdsWithAiError(ads, finalErrorText);
+    return markAdsWithAiError(ads, finalErrorText, { code: details.classifyError(finalErrorText) });
 };
 
 const sendAdminHelp = (chatId) => bot.sendMessage(chatId, '<b>Админ-команды</b>\n/admin — статистика\n/admin users — список пользователей\n/admin filters ID — фильтры пользователя по Telegram ID\n/admin add ID — добавить администратора\n/admin remove ID — удалить администратора', { parse_mode: 'HTML' });
@@ -1537,6 +1599,45 @@ async function sendNotification() {
                     linkArrForAlarms = await filterAdsWithAi(objectLink, batchToFilter, chatIDS[i]);
                 }
 
+                if (aiWasActive) {
+                    const currentModel = GEMINI_MODELS[
+                        Number.isInteger(objectLink.aiCurrentModelIndex)
+                            ? objectLink.aiCurrentModelIndex
+                            : 0
+                    ];
+
+                    const errorGroups = new Map();
+
+                    for (const ad of linkArrForAlarms) {
+                        if (ad.aiError || ad.aiMark === '⚠️') {
+                            const errorCode = ad.aiErrorCode
+                                || details.classifyError(ad.aiReason || 'AI не вернул решение');
+
+                            if (!errorGroups.has(errorCode)) {
+                                errorGroups.set(errorCode, []);
+                            }
+
+                            errorGroups.get(errorCode).push(ad);
+                            continue;
+                        }
+
+                        details.recordAdOutcome(
+                            chatIDS[i],
+                            ad,
+                            ad.aiModel || currentModel
+                        );
+                    }
+
+                    for (const [errorCode, errorAds] of errorGroups) {
+                        details.recordBatchError(
+                            chatIDS[i],
+                            errorAds,
+                            errorAds[0].aiModel || currentModel,
+                            errorCode
+                        );
+                    }
+                }
+
                 secondBotAudit.sendAuditBatch(chatIDS[i], linkArrForAlarms)
                     .catch(error => console.error('Ошибка отправки пачки в аудит-бот:', error.message));
 
@@ -1555,7 +1656,7 @@ async function sendNotification() {
                     let aiInfo = '';
 
                     if (ad.aiError) {
-                        aiInfo = `⚠️ Ошибка AI: ${ad.aiReason || 'Не удалось получить решение Gemini'}\n\n`;
+                        aiInfo = '';
                     } else if (getAiShowExplanations(objectLink) && ad.aiMark) {
                         aiInfo = `Решение AI: ${ad.aiMark}\nПочему: ${ad.aiReason || 'Причина не указана'}\n\n`;
                     }
@@ -1567,10 +1668,17 @@ async function sendNotification() {
                     const media = (ad.img || []).slice(0, 9);
                     const isRejected = ad.aiMark === '❌';
 
+                    const reportButtonBase = ad.aiError ? details.getReportButton(chatIDS[i], ad.aiReportId) : null;
+                    const reportButton = reportButtonBase ? { ...reportButtonBase, text: '📄 Отчёт AI' } : null;
+                    const reportMarkup = reportButton ? { inline_keyboard: [[reportButton]] } : undefined;
+                    const messageOptions = {
+                        disable_notification: isRejected,
+                        ...(reportMarkup ? { reply_markup: reportMarkup } : {})
+                    };
+
                     if (media.length === 0) {
-                        bot.sendMessage(chatIDS[i], messageString, {
-                            disable_notification: isRejected
-                        }).catch(error => console.error('Ошибка отправки текста:', error.message));
+                        bot.sendMessage(chatIDS[i], messageString, messageOptions)
+                            .catch(error => console.error('Ошибка отправки текста:', error.message));
 
                         continue;
                     }
@@ -1578,7 +1686,7 @@ async function sendNotification() {
                     if (media.length === 1) {
                         bot.sendPhoto(chatIDS[i], media[0].media, {
                             caption: messageString,
-                            disable_notification: isRejected
+                            ...messageOptions
                         }).catch(error => console.error('Ошибка отправки фото:', error.message));
                     } else {
                         const mediaGroup = media.map((photo, index) => ({
@@ -1589,6 +1697,13 @@ async function sendNotification() {
 
                         bot.sendMediaGroup(chatIDS[i], mediaGroup, {
                             disable_notification: isRejected
+                        }).then(sentMessages => {
+                            if (!reportMarkup) return;
+                            bot.sendMessage(chatIDS[i], '📄 Отчёт AI:', {
+                                reply_markup: reportMarkup,
+                                disable_notification: isRejected,
+                                ...(Array.isArray(sentMessages) && sentMessages[0] ? { reply_to_message_id: sentMessages[0].message_id } : {})
+                            }).catch(error => console.error('Ошибка отправки кнопки AI-отчёта:', error.message));
                         }).catch(error => console.error('Ошибка отправки альбома:', error.message));
                     }
                 }
