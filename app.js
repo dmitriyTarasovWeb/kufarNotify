@@ -198,6 +198,26 @@ function parseArr(arr) {
 
         const lodashFinder = (arr, property, key) => lodash.chain(arr).find({ pl: property }).get(key).value();
 
+        const attributes = Array.isArray(short.ad_parameters)
+            ? short.ad_parameters
+                .filter(param =>
+                    param &&
+                    typeof param.pl === 'string' &&
+                    typeof param.vl === 'string' &&
+                    param.vl.trim() !== '' &&
+                    ![
+                        'Категория',
+                        'Подкатегория',
+                        'Регион',
+                        'Город / Район'
+                    ].includes(param.pl.trim())
+                )
+                .map(param => ({
+                    name: param.pl.trim(),
+                    value: param.vl.trim()
+                }))
+            : [];
+
         const parsedObj = {
             category: parseInt(short.category),
             categoryTxt: lodashFinder(short.ad_parameters, "Категория", "vl") === undefined ? lodashFinder(short.ad_parameters, "Подкатегория", "vl") : lodashFinder(short.ad_parameters, "Категория", "vl"),
@@ -212,7 +232,8 @@ function parseArr(arr) {
             description: findNotExist(short.body, NOT_EXIST),
             time: short.list_time,
             img: newImages,
-            id: short.ad_id
+            id: short.ad_id,
+            attributes,
         };
 
         parsedArr.push(parsedObj);
@@ -870,7 +891,7 @@ const callGemini = async (apiKey, prompt, ads, model = GEMINI_MODELS[0]) => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 20000);
 
-    const systemPrompt = `${prompt}\n\nОБЯЗАТЕЛЬНЫЕ ТЕХНИЧЕСКИЕ ПРАВИЛА ОТВЕТА:\n1. Оцени каждое объявление отдельно и реши, соответствует ли оно интересам пользователя и заданному промпту.\n2. Используй только ID из входного списка. Не придумывай, не изменяй и не переставляй ID между объявлениями.\n3. Верни строго валидный JSON без Markdown, пояснений и текста вокруг. Формат: {"decisions":[{"id":"ID_1","keep":true,"reason":"Краткая причина решения"}]}.\n4. Верни ровно одно решение для каждого входного объявления. Не пропускай объявления.\n5. Поле keep должно быть true, если объявление подходит и его следует оставить, или false, если оно не подходит.\n6. В поле reason напиши короткое объяснение решения на русском языке, желательно одним предложением и не длиннее 160 символов.\n7. Если keep=true, объясни, какие признаки объявления соответствуют запросу пользователя. Если keep=false, объясни конкретную причину несоответствия.\n8. Основывай причину на фактах из названия, описания, цены, категории и локации объявления, а также на условиях промпта. Не выдумывай отсутствующие факты.\n9. Не добавляй длинные рассуждения. Нужна только краткая причина, понятная пользователю и полезная для корректировки промпта.\n10. Если данных недостаточно, прямо укажи это в причине вместо догадок.\n11. Если входной список пуст, верни {"decisions":[]}.\n12. ID всегда должны быть строками, поле keep — логическим значением, поле reason — строкой.`;
+    const systemPrompt = `${prompt}\n\nОБЯЗАТЕЛЬНЫЕ ТЕХНИЧЕСКИЕ ПРАВИЛА ОТВЕТА:\n1. Оцени каждое объявление отдельно и реши, соответствует ли оно интересам пользователя и заданному промпту.\n2. Используй только ID из входного списка. Не придумывай, не изменяй и не переставляй ID между объявлениями.\n3. Верни строго валидный JSON без Markdown, пояснений и текста вокруг. Формат: {"decisions":[{"id":"ID_1","keep":true,"reason":"Краткая причина решения"}]}.\n4. Верни ровно одно решение для каждого входного объявления. Не пропускай объявления.\n5. Поле keep должно быть true, если объявление подходит и его следует оставить, или false, если оно не подходит.\n6. В поле reason напиши короткое объяснение решения на русском языке, желательно одним предложением и не длиннее 160 символов.\n7. Если keep=true, объясни, какие признаки объявления соответствуют запросу пользователя. Если keep=false, объясни конкретную причину несоответствия.\n8. Используй двухэтапный анализ информации об объявлении. СНАЧАЛА анализируй основную информацию: название (title), описание (description), цену, категорию и локацию. Если этих данных достаточно, чтобы уверенно оценить соответствие объявления запросу пользователя, принимай решение на их основании. Не используй дополнительные характеристики attributes без необходимости и не ищи в них дополнительные причины для отклонения подходящего объявления. ТОЛЬКО ЕСЛИ основной информации недостаточно, она неоднозначна или не позволяет уверенно определить важные характеристики товара, обратись к полю attributes. Используй его исключительно для уточнения конкретных недостающих сведений: типа товара, объёма памяти, форм-фактора, состояния и других характеристик. Дополнительные атрибуты являются вспомогательным источником, а не заменой основной информации. Не позволяй им без необходимости менять решение, уже обоснованное достаточными основными данными. Если основная информация прямо противоречит атрибутам, не игнорируй это противоречие и не делай необоснованных выводов. Если и после проверки атрибутов данных недостаточно, прямо укажи это в причине решения. Не выдумывай отсутствующие факты.9. Не добавляй длинные рассуждения. Нужна только краткая причина, понятная пользователю и полезная для корректировки промпта.\n10. Если данных недостаточно, прямо укажи это в причине вместо догадок.\n11. Если входной список пуст, верни {"decisions":[]}.\n12. ID всегда должны быть строками, поле keep — логическим значением, поле reason — строкой.`;
 
     let firstTime = new Date().getTime();
 
@@ -1031,6 +1052,9 @@ const filterAdsWithAi = async (objectLink, ads, chatId) => {
         category: String(ad.categoryTxt || ''),
         region: String(ad.stateTxt || ''),
         city: String(ad.townTxt || ''),
+        attributes: Array.isArray(ad.attributes)
+            ? ad.attributes
+            : [],
         link: String(ad.link || '')
     }));
 
@@ -1618,7 +1642,7 @@ async function sendNotification() {
                             }
 
                             errorGroups.get(errorCode).push(ad);
-                            continue;
+                            // continue;
                         }
 
                         details.recordAdOutcome(
@@ -1655,8 +1679,15 @@ async function sendNotification() {
 
                     let aiInfo = '';
 
-                    if (ad.aiError) {
-                        aiInfo = '';
+                    if (ad.aiError || ad.aiMark === '⚠️') {
+                        const reportUrl = details.getReportUrl(
+                            chatIDS[i],
+                            ad.aiReportId
+                        );
+
+                        aiInfo = reportUrl
+                            ? `⚠️ Ошибка AI. <a href="${reportUrl}">Открыть отчёт</a>\n\n`
+                            : '⚠️ Ошибка AI. Отчёт временно недоступен.\n\n';
                     } else if (getAiShowExplanations(objectLink) && ad.aiMark) {
                         aiInfo = `Решение AI: ${ad.aiMark}\nПочему: ${ad.aiReason || 'Причина не указана'}\n\n`;
                     }
@@ -1668,12 +1699,9 @@ async function sendNotification() {
                     const media = (ad.img || []).slice(0, 9);
                     const isRejected = ad.aiMark === '❌';
 
-                    const reportButtonBase = ad.aiError ? details.getReportButton(chatIDS[i], ad.aiReportId) : null;
-                    const reportButton = reportButtonBase ? { ...reportButtonBase, text: '📄 Отчёт AI' } : null;
-                    const reportMarkup = reportButton ? { inline_keyboard: [[reportButton]] } : undefined;
                     const messageOptions = {
-                        disable_notification: isRejected,
-                        ...(reportMarkup ? { reply_markup: reportMarkup } : {})
+                        parse_mode: 'HTML',
+                        disable_notification: isRejected
                     };
 
                     if (media.length === 0) {
@@ -1697,14 +1725,9 @@ async function sendNotification() {
 
                         bot.sendMediaGroup(chatIDS[i], mediaGroup, {
                             disable_notification: isRejected
-                        }).then(sentMessages => {
-                            if (!reportMarkup) return;
-                            bot.sendMessage(chatIDS[i], '📄 Отчёт AI:', {
-                                reply_markup: reportMarkup,
-                                disable_notification: isRejected,
-                                ...(Array.isArray(sentMessages) && sentMessages[0] ? { reply_to_message_id: sentMessages[0].message_id } : {})
-                            }).catch(error => console.error('Ошибка отправки кнопки AI-отчёта:', error.message));
-                        }).catch(error => console.error('Ошибка отправки альбома:', error.message));
+                        }).catch(error => {
+                            console.error('Ошибка отправки альбома:', error.message);
+                        });
                     }
                 }
 

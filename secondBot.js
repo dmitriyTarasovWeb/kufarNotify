@@ -31,10 +31,20 @@ let globalSendQueue = Promise.resolve();
 let lastGlobalSendTime = 0;
 
 if (TOKEN_2) {
-    bot = new TelegramBot(TOKEN_2, { polling: { interval: 1000, autoStart: true } });
+    bot = new TelegramBot(TOKEN_2, {
+        polling: {
+            interval: 1000,
+            autoStart: true
+        }
+    });
 
-    bot.on('polling_error', error => console.error('Ошибка polling второго бота:', error.message));
-    bot.on('error', error => console.error('Ошибка второго бота:', error.message));
+    bot.on('polling_error', error =>
+        console.error('Ошибка polling второго бота:', error.message)
+    );
+
+    bot.on('error', error =>
+        console.error('Ошибка второго бота:', error.message)
+    );
 } else {
     console.error('TOKEN_2 не задан в .env. Второй бот аудита отключён.');
 }
@@ -45,9 +55,13 @@ const readSubscribers = () => {
 
         if (!fs.existsSync(SUBSCRIBERS_FILE)) return;
 
-        const saved = JSON.parse(fs.readFileSync(SUBSCRIBERS_FILE, 'utf8'));
+        const saved = JSON.parse(
+            fs.readFileSync(SUBSCRIBERS_FILE, 'utf8')
+        );
 
-        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return;
+        if (!saved || typeof saved !== 'object' || Array.isArray(saved)) {
+            return;
+        }
 
         for (const [chatId, data] of Object.entries(saved)) {
             if (!data || typeof data !== 'object') continue;
@@ -56,21 +70,35 @@ const readSubscribers = () => {
                 chatId: Number(chatId),
                 enabled: data.enabled !== false,
                 ban: Boolean(data.ban),
-                bansCount: Number.isFinite(Number(data.bansCount)) && Number(data.bansCount) > 0 ? Number(data.bansCount) : 1,
+                bansCount:
+                    Number.isFinite(Number(data.bansCount)) &&
+                    Number(data.bansCount) > 0
+                        ? Number(data.bansCount)
+                        : 1,
                 lastTimeBan: data.lastTimeBan || 0
             };
         }
     } catch (error) {
-        console.error('Ошибка чтения подписчиков второго бота:', error.message);
+        console.error(
+            'Ошибка чтения подписчиков второго бота:',
+            error.message
+        );
     }
 };
 
 const saveSubscribers = () => {
     try {
         fs.mkdirSync(DIRECTORY_PATH, { recursive: true });
-        fs.writeFileSync(SUBSCRIBERS_FILE, JSON.stringify(subscribers, null, 2));
+
+        fs.writeFileSync(
+            SUBSCRIBERS_FILE,
+            JSON.stringify(subscribers, null, 2)
+        );
     } catch (error) {
-        console.error('Ошибка сохранения подписчиков второго бота:', error.message);
+        console.error(
+            'Ошибка сохранения подписчиков второго бота:',
+            error.message
+        );
     }
 };
 
@@ -81,7 +109,9 @@ const getBotLink = async () => {
 
     const info = await bot.getMe();
 
-    if (!info.username) throw new Error('У второго бота не найден username');
+    if (!info.username) {
+        throw new Error('У второго бота не найден username');
+    }
 
     return `https://t.me/${info.username}`;
 };
@@ -92,6 +122,7 @@ const getLastTimeBan = subscriber => {
     if (!subscriber.lastTimeBan) return 0;
 
     const timestamp = new Date(subscriber.lastTimeBan).getTime();
+
     return Number.isFinite(timestamp) ? timestamp : 0;
 };
 
@@ -107,8 +138,15 @@ const checkSubscriberBan = (chatId, subscriber) => {
     saveSubscribers();
 
     if (bot) {
-        bot.sendMessage(chatId, '✅ Ограничение второго бота закончилось. Аудит объявлений снова работает.')
-            .catch(error => console.error('Ошибка уведомления об окончании бана второго бота:', error.message));
+        bot.sendMessage(
+            chatId,
+            '✅ Ограничение второго бота закончилось. Аудит объявлений снова работает.'
+        ).catch(error =>
+            console.error(
+                'Ошибка уведомления об окончании бана второго бота:',
+                error.message
+            )
+        );
     }
 
     return false;
@@ -116,7 +154,10 @@ const checkSubscriberBan = (chatId, subscriber) => {
 
 const sendGloballyLimited = task => {
     const nextTask = globalSendQueue.catch(() => {}).then(async () => {
-        const wait = Math.max(0, lastGlobalSendTime + SECOND_BOT_SEND_GAP - Date.now());
+        const wait = Math.max(
+            0,
+            lastGlobalSendTime + SECOND_BOT_SEND_GAP - Date.now()
+        );
 
         if (wait > 0) await delay(wait);
 
@@ -128,47 +169,95 @@ const sendGloballyLimited = task => {
     });
 
     globalSendQueue = nextTask.catch(() => {});
+
     return nextTask;
 };
 
-const sendText = (chatId, text, options = {}) => sendGloballyLimited(() => bot.sendMessage(chatId, text, options));
+const sendText = (chatId, text, options = {}) =>
+    sendGloballyLimited(() => bot.sendMessage(chatId, text, options));
 
 const waitForChatRate = async chatId => {
     const key = String(chatId);
     const lastSend = lastChatSendTime.get(key) || 0;
-    const wait = Math.max(0, lastSend + DELAY_BETWEEN_ADS - Date.now());
+
+    const wait = Math.max(
+        0,
+        lastSend + DELAY_BETWEEN_ADS - Date.now()
+    );
 
     if (wait > 0) await delay(wait);
 };
 
-const formatAdMessage = ad => {
+const escapeHtml = value =>
+    String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+const formatAdMessage = (ad, chatId) => {
     let aiInfo = '';
 
-    if (ad.aiError) {
-        aiInfo = '⚠️ Ошибка AI — подробный отчёт доступен по кнопке ниже.\n\n';
+    if (ad.aiError || ad.aiMark === '⚠️') {
+        const reportUrl = ad.aiReportId
+            ? details.getReportUrl(chatId, ad.aiReportId)
+            : null;
+
+        aiInfo = reportUrl
+            ? `⚠️ Ошибка AI. <a href="${escapeHtml(reportUrl)}">Отчёт об ошибке</a>\n\n`
+            : '⚠️ Ошибка AI. Отчёт временно недоступен.\n\n';
     } else if (ad.aiMark) {
-        aiInfo = `Решение AI: ${ad.aiMark}\nПочему: ${String(ad.aiReason || 'Причина не указана').slice(0, 300)}\n\n`;
+        aiInfo =
+            `Решение AI: ${escapeHtml(ad.aiMark)}\n` +
+            `Почему: ${escapeHtml(
+                String(ad.aiReason || 'Причина не указана').slice(0, 300)
+            )}\n\n`;
     } else {
-        aiInfo = '⚪ AI не оценивал это объявление (фильтр выключен или нет доступного токена).\n\n';
+        aiInfo =
+            '⚪ AI не оценивал это объявление ' +
+            '(фильтр выключен или нет доступного токена).\n\n';
     }
 
-    const price = Number(ad.priceByn) === 0 ? 'Договорная' : `${ad.priceByn} BYN`;
-    const title = String(ad.title || 'Без названия');
-    const description = String(ad.description || '').slice(0, 350);
+    const price = Number(ad.priceByn) === 0
+        ? 'Договорная'
+        : `${escapeHtml(ad.priceByn)} BYN`;
 
-    let message = `[АУДИТ AI]\n${aiInfo}${title}\n\nОписание: ${description}\n\nОбласть: ${ad.stateTxt || '-'} / Город: ${ad.townTxt || '-'}\nЦена: ${price}\nКатегория: ${ad.categoryTxt || '-'}\nСсылка: ${ad.link || ''}`;
+    const title = escapeHtml(ad.title || 'Без названия');
+    const description = escapeHtml(
+        String(ad.description || '').slice(0, 350)
+    );
+
+    const region = escapeHtml(ad.stateTxt || '-');
+    const city = escapeHtml(ad.townTxt || '-');
+    const category = escapeHtml(ad.categoryTxt || '-');
+    const link = String(ad.link || '');
+
+    const safeAdLink = /^https?:\/\//i.test(link)
+        ? escapeHtml(link)
+        : '';
+
+    const message =
+        `[АУДИТ AI]\n` +
+        `${aiInfo}` +
+        `${title}\n\n` +
+        `Описание: ${description}\n\n` +
+        `Область: ${region} / Город: ${city}\n` +
+        `Цена: ${price}\n` +
+        `Категория: ${category}\n` +
+        `Ссылка: ${safeAdLink}`;
 
     return message.slice(0, 1000);
 };
 
 const sendAuditAd = async (chatId, ad) => {
-    const message = formatAdMessage(ad);
-    const media = (Array.isArray(ad.img) ? ad.img : []).slice(0, 9);
-    const reportButton = ad.aiError ? details.getReportButton(chatId, ad.aiReportId) : null;
-    const reportMarkup = reportButton ? { inline_keyboard: [[reportButton]] } : undefined;
-    const messageOptions = reportMarkup ? { reply_markup: reportMarkup } : {};
-
     if (!bot) return;
+
+    const message = formatAdMessage(ad, chatId);
+    const media = (Array.isArray(ad.img) ? ad.img : []).slice(0, 9);
+
+    const messageOptions = {
+        parse_mode: 'HTML'
+    };
 
     if (media.length === 0) {
         await sendText(chatId, message, messageOptions);
@@ -177,9 +266,22 @@ const sendAuditAd = async (chatId, ad) => {
 
     if (media.length === 1) {
         try {
-            await sendGloballyLimited(() => bot.sendPhoto(chatId, media[0].media || EMPTY_IMAGE_URL, { caption: message, ...messageOptions }));
+            await sendGloballyLimited(() =>
+                bot.sendPhoto(
+                    chatId,
+                    media[0].media || EMPTY_IMAGE_URL,
+                    {
+                        caption: message,
+                        ...messageOptions
+                    }
+                )
+            );
         } catch (error) {
-            console.error('Ошибка фото в аудит-боте, отправляю текст:', error.message);
+            console.error(
+                'Ошибка фото в аудит-боте, отправляю текст:',
+                error.message
+            );
+
             await sendText(chatId, message, messageOptions);
         }
 
@@ -189,19 +291,24 @@ const sendAuditAd = async (chatId, ad) => {
     const mediaGroup = media.map((photo, index) => ({
         type: 'photo',
         media: photo.media || EMPTY_IMAGE_URL,
-        ...(index === 0 ? { caption: message } : {})
+        ...(index === 0
+            ? {
+                caption: message,
+                parse_mode: 'HTML'
+            }
+            : {})
     }));
 
     try {
-        const sentMessages = await sendGloballyLimited(() => bot.sendMediaGroup(chatId, mediaGroup));
-        if (reportMarkup) {
-            await sendText(chatId, '⚠️ Ошибка AI — подробный отчёт:', {
-                ...messageOptions,
-                ...(Array.isArray(sentMessages) && sentMessages[0] ? { reply_to_message_id: sentMessages[0].message_id } : {})
-            });
-        }
+        await sendGloballyLimited(() =>
+            bot.sendMediaGroup(chatId, mediaGroup)
+        );
     } catch (error) {
-        console.error('Ошибка альбома в аудит-боте, отправляю текст:', error.message);
+        console.error(
+            'Ошибка альбома в аудит-боте, отправляю текст:',
+            error.message
+        );
+
         await sendText(chatId, message, messageOptions);
     }
 };
@@ -211,18 +318,32 @@ const checkSpamAlarm = async (chatId, subscriber, alarmsCount) => {
 
     subscriber.ban = true;
 
-    const banMinutes = subscriber.bansCount * LIMIT_MINUTES_FIRST_BAN;
-    subscriber.lastTimeBan = new Date(Date.now() + banMinutes * 60 * 1000);
+    const banMinutes =
+        subscriber.bansCount * LIMIT_MINUTES_FIRST_BAN;
 
-    const banUntil = new Date(subscriber.lastTimeBan).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
+    subscriber.lastTimeBan = new Date(
+        Date.now() + banMinutes * 60 * 1000
+    );
+
+    const banUntil = new Date(
+        subscriber.lastTimeBan
+    ).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
 
     subscriber.bansCount *= STEP_FOR_BANS;
     saveSubscribers();
 
     await sendText(
         chatId,
-        `⛔ Аудит-бот временно остановил отправку из-за большого количества совпавших объявлений.\n\nОграничение: ${banMinutes} минут(ы).\n\nУточните фильтры в основном боте.\nОграничение действует до: ${banUntil}`
-    ).catch(error => console.error('Ошибка уведомления о бане второго бота:', error.message));
+        `⛔ Аудит-бот временно остановил отправку из-за большого количества совпавших объявлений.\n\n` +
+        `Ограничение: ${banMinutes} минут(ы).\n\n` +
+        `Уточните фильтры в основном боте.\n` +
+        `Ограничение действует до: ${banUntil}`
+    ).catch(error =>
+        console.error(
+            'Ошибка уведомления о бане второго бота:',
+            error.message
+        )
+    );
 
     return true;
 };
@@ -234,19 +355,30 @@ const processAuditBatch = async (chatId, ads) => {
     if (checkSubscriberBan(chatId, subscriber)) return false;
     if (!ads.length) return false;
 
-    if (await checkSpamAlarm(chatId, subscriber, ads.length)) return false;
+    if (await checkSpamAlarm(chatId, subscriber, ads.length)) {
+        return false;
+    }
 
     for (let i = 0; i < ads.length; i++) {
         const latestSubscriber = getSubscriber(chatId);
 
-        if (!latestSubscriber || !latestSubscriber.enabled || checkSubscriberBan(chatId, latestSubscriber)) return false;
+        if (
+            !latestSubscriber ||
+            !latestSubscriber.enabled ||
+            checkSubscriberBan(chatId, latestSubscriber)
+        ) {
+            return false;
+        }
 
         await waitForChatRate(chatId);
 
         try {
             await sendAuditAd(Number(chatId), ads[i]);
         } catch (error) {
-            console.error('Ошибка отправки объявления в аудит-бот:', error.message);
+            console.error(
+                'Ошибка отправки объявления в аудит-бот:',
+                error.message
+            );
         } finally {
             lastChatSendTime.set(String(chatId), Date.now());
         }
@@ -256,48 +388,43 @@ const processAuditBatch = async (chatId, ads) => {
 };
 
 const sendAuditBatch = (chatId, ads) => {
-    if (!bot || !Array.isArray(ads) || ads.length === 0) return Promise.resolve(false);
+    if (!bot || !Array.isArray(ads) || ads.length === 0) {
+        return Promise.resolve(false);
+    }
 
     const subscriber = getSubscriber(chatId);
 
-    if (!subscriber || !subscriber.enabled) return Promise.resolve(false);
+    if (!subscriber || !subscriber.enabled) {
+        return Promise.resolve(false);
+    }
 
-    // Копируем пачку сразу: основной бот после вызова может очистить свою очередь.
+    // Копируем пачку сразу: основной бот после вызова может очистить очередь.
     const batch = ads.map(ad => ({
         ...ad,
-        img: Array.isArray(ad.img) ? ad.img.map(image => ({ ...image })) : []
+        img: Array.isArray(ad.img)
+            ? ad.img.map(image => ({ ...image }))
+            : []
     }));
 
     const key = String(chatId);
     const previous = chatQueues.get(key) || Promise.resolve();
-    const task = previous.catch(() => {}).then(() => processAuditBatch(Number(key), batch));
+
+    const task = previous
+        .catch(() => {})
+        .then(() => processAuditBatch(Number(key), batch));
 
     chatQueues.set(key, task);
 
     task.finally(() => {
-        if (chatQueues.get(key) === task) chatQueues.delete(key);
+        if (chatQueues.get(key) === task) {
+            chatQueues.delete(key);
+        }
     }).catch(() => {});
 
     return task;
 };
 
 if (bot) {
-    bot.on('callback_query', async callbackQuery => {
-        const match = String(callbackQuery.data || '').match(/^ai_report_([a-f0-9]{40})$/i);
-        if (!match) return;
-
-        const chatId = callbackQuery.message && callbackQuery.message.chat ? callbackQuery.message.chat.id : null;
-        await bot.answerCallbackQuery(callbackQuery.id).catch(() => {});
-        const event = details.getEvent(match[1]);
-        if (!event || String(event.chatId) !== String(chatId)) {
-            if (chatId !== null) await bot.sendMessage(chatId, 'Подробный отчёт не найден. Возможно, запись отсутствует в журнале.');
-            return;
-        }
-
-        await bot.sendMessage(chatId, details.renderTelegramEventText(event))
-            .catch(error => console.error('Ошибка показа подробного AI-отчёта:', error.message));
-    });
-
     bot.on('message', async message => {
         const chatId = message.chat.id;
         const text = String(message.text || '').trim();
@@ -324,14 +451,25 @@ if (bot) {
             saveSubscribers();
 
             if (checkSubscriberBan(chatId, subscriber)) {
-                const banUntil = new Date(subscriber.lastTimeBan).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
-                await bot.sendMessage(chatId, `Аудит-бот подключён, но отправка пока заблокирована до ${banUntil}. Уточните фильтры в основном боте.`);
+                const banUntil = new Date(
+                    subscriber.lastTimeBan
+                ).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
+
+                await bot.sendMessage(
+                    chatId,
+                    `Аудит-бот подключён, но отправка пока заблокирована до ${banUntil}. Уточните фильтры в основном боте.`
+                );
+
                 return;
             }
 
             await bot.sendMessage(
                 chatId,
-                '✅ Аудит-бот подключён.\n\nЯ буду показывать объявления, совпавшие с сухими фильтрами основного бота, включая отклонённые AI. Вызов Gemini повторно не выполняется.\n\nЧтобы не отвлекаться, отключите уведомления именно для этого чата в настройках Telegram. Сообщения продолжат сохраняться в истории.\n\n/stopaudit — перестать получать аудит\n/start — снова включить аудит'
+                '✅ Аудит-бот подключён.\n\n' +
+                'Я буду показывать объявления, совпавшие с сухими фильтрами основного бота, включая отклонённые AI. Вызов Gemini повторно не выполняется.\n\n' +
+                'Чтобы не отвлекаться, отключите уведомления именно для этого чата в настройках Telegram. Сообщения продолжат сохраняться в истории.\n\n' +
+                '/stopaudit — перестать получать аудит\n' +
+                '/start — снова включить аудит'
             );
 
             return;
@@ -341,13 +479,22 @@ if (bot) {
             const subscriber = getSubscriber(chatId);
 
             if (!subscriber) {
-                await bot.sendMessage(chatId, 'Сначала подключите аудит командой /start.');
+                await bot.sendMessage(
+                    chatId,
+                    'Сначала подключите аудит командой /start.'
+                );
+
                 return;
             }
 
             subscriber.enabled = false;
             saveSubscribers();
-            await bot.sendMessage(chatId, 'Аудит отключён. Отправка возобновится после команды /start.');
+
+            await bot.sendMessage(
+                chatId,
+                'Аудит отключён. Отправка возобновится после команды /start.'
+            );
+
             return;
         }
 
@@ -355,17 +502,34 @@ if (bot) {
             const subscriber = getSubscriber(chatId);
 
             if (!subscriber) {
-                await bot.sendMessage(chatId, 'Аудит не подключён. Отправьте /start.');
+                await bot.sendMessage(
+                    chatId,
+                    'Аудит не подключён. Отправьте /start.'
+                );
+
                 return;
             }
 
             if (checkSubscriberBan(chatId, subscriber)) {
-                const banUntil = new Date(subscriber.lastTimeBan).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
-                await bot.sendMessage(chatId, `Статус: ${subscriber.enabled ? 'включён' : 'выключен'}\nОграничение до: ${banUntil}`);
+                const banUntil = new Date(
+                    subscriber.lastTimeBan
+                ).toLocaleString('ru-RU', OPTIONS_FOR_DATE);
+
+                await bot.sendMessage(
+                    chatId,
+                    `Статус: ${subscriber.enabled ? 'включён' : 'выключен'}\n` +
+                    `Ограничение до: ${banUntil}`
+                );
+
                 return;
             }
 
-            await bot.sendMessage(chatId, `Статус аудита: ${subscriber.enabled ? 'включён' : 'выключен'}\nПорог пачки: ${LIMIT_ALARMS_IN_MINUTE} объявлений.\nКоманды: /start, /stopaudit, /status`);
+            await bot.sendMessage(
+                chatId,
+                `Статус аудита: ${subscriber.enabled ? 'включён' : 'выключен'}\n` +
+                `Порог пачки: ${LIMIT_ALARMS_IN_MINUTE} объявлений.\n` +
+                'Команды: /start, /stopaudit, /status'
+            );
         }
     });
 
@@ -375,6 +539,7 @@ if (bot) {
                 if (!subscriber.ban) continue;
 
                 const banUntil = getLastTimeBan(subscriber);
+
                 if (banUntil > Date.now()) continue;
 
                 subscriber.ban = false;
@@ -382,8 +547,15 @@ if (bot) {
                 saveSubscribers();
 
                 if (subscriber.enabled) {
-                    sendText(Number(chatId), '✅ Ограничение аудит-бота закончилось. При новых совпадениях сухих фильтров отправка снова начнётся.')
-                        .catch(error => console.error('Ошибка уведомления об окончании ограничения:', error.message));
+                    sendText(
+                        Number(chatId),
+                        '✅ Ограничение аудит-бота закончилось. При новых совпадениях сухих фильтров отправка снова начнётся.'
+                    ).catch(error =>
+                        console.error(
+                            'Ошибка уведомления об окончании ограничения:',
+                            error.message
+                        )
+                    );
                 }
             }
 
