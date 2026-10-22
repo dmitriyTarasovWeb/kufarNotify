@@ -32,8 +32,6 @@ const CHECK_BAN_TIMEOUT = 1000
 const OWNER_ID = 929705938
 const ADMINS_FILE = path.join(DIRECTORY_PATH, 'admins.json')
 
-const IS_TEST = true;
-
 const CONCURRENCY = 6
 const REGUEST_INTERVAL_START = 90
 const REGUEST_INTERVAL_END = 110

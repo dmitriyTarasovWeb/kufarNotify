@@ -18,7 +18,6 @@ const {
     LIMIT_MINUTES_FIRST_BAN,
     STEP_FOR_BANS,
     CHECK_BAN_TIMEOUT,
-    IS_TEST,
     ADMINS_FILE,
     OWNER_ID,
     ADDITIONAL_PAGES_FOR_LOAD,
@@ -1720,7 +1719,12 @@ async function sendNotification() {
                         const mediaGroup = media.map((photo, index) => ({
                             type: 'photo',
                             media: photo.media,
-                            ...(index === 0 ? { caption: messageString } : {})
+                            ...(index === 0
+                                ? {
+                                    caption: messageString,
+                                    parse_mode: 'HTML'
+                                }
+                                : {})
                         }));
 
                         bot.sendMediaGroup(chatIDS[i], mediaGroup, {

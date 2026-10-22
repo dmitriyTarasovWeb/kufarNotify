@@ -35,9 +35,134 @@ const eventsByPublicId = new Map();
 const eventsByChatId = new Map();
 const weeklyReportTokens = new Map();
 const WEEKLY_REPORT_TOKEN_TTL_MS = 24 * 60 * 60 * 1000;
+const ERROR_REPORT_TTL_MS = 48 * 60 * 60 * 1000;
+const ERROR_REPORT_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
+
+let errorReportCleanupTimer = null;
+
 
 const toText = (value, maxLength = 10000) => String(value ?? '').replace(/\u0000/g, '').slice(0, maxLength);
 const safeFilePart = value => String(value).replace(/[^\d-]/g, '_');
+function isErrorReportExpired(event, now = Date.now()) {
+    if (!event || event.type !== 'error') return false;
+    if (event.reportExpired === true) return true;
+
+    const timestamp = Date.parse(event.timestamp);
+
+    return Number.isFinite(timestamp)
+        && now - timestamp >= ERROR_REPORT_TTL_MS;
+}
+
+function redactExpiredErrorReport(event) {
+    if (!event || event.type !== 'error') return false;
+
+    const hasDetails =
+        event.reportExpired !== true ||
+        Boolean(
+            event.title ||
+            event.message ||
+            event.model ||
+            event.ad ||
+            event.metadata
+        );
+
+    if (!hasDetails) return false;
+
+    // Сохраняем дату, тип и код ошибки для недельной статистики.
+    // Подробности, относящиеся к HTML-отчёту, удаляем.
+    event.reportExpired = true;
+    event.title = '';
+    event.message = '';
+    event.model = '';
+    event.ad = null;
+    event.metadata = null;
+
+    return true;
+}
+
+function persistExpiredReportDetails(chatId, expiredEvents) {
+    if (!expiredEvents.length) return;
+
+    const filePath = path.join(
+        reportDirectory,
+        `${safeFilePart(chatId)}.jsonl`
+    );
+
+    try {
+        if (!fs.existsSync(filePath)) return;
+
+        const replacements = new Map(
+            expiredEvents.map(event => [
+                String(event.id),
+                JSON.stringify(event)
+            ])
+        );
+
+        const content = fs.readFileSync(filePath, 'utf8');
+        let changed = false;
+
+        // Обновляем только истёкшие записи, остальные строки журнала
+        // оставляем без изменений.
+        const updatedLines = content.split('\n').map(line => {
+            if (!line.trim()) return line;
+
+            try {
+                const savedEvent = JSON.parse(line);
+                const replacement = replacements.get(
+                    String(savedEvent.id)
+                );
+
+                if (replacement !== undefined) {
+                    if (line !== replacement) changed = true;
+                    return replacement;
+                }
+            } catch (_) {
+                // Не изменяем строки, которые не удалось разобрать.
+            }
+
+            return line;
+        });
+
+        if (changed) {
+            fs.writeFileSync(
+                filePath,
+                updatedLines.join('\n'),
+                'utf8'
+            );
+        }
+    } catch (error) {
+        console.error(
+            'Не удалось удалить подробности истёкших AI-отчётов:',
+            error.message
+        );
+    }
+}
+
+function cleanupExpiredErrorReports() {
+    if (!configured) return;
+
+    const now = Date.now();
+
+    for (const [chatId, events] of eventsByChatId.entries()) {
+        const expiredEvents = [];
+
+        for (const event of events) {
+            if (!isErrorReportExpired(event, now)) continue;
+
+            if (redactExpiredErrorReport(event)) {
+                expiredEvents.push(event);
+            }
+
+            if (event.publicId) {
+                eventsByPublicId.delete(String(event.publicId));
+            }
+        }
+
+        if (expiredEvents.length) {
+            persistExpiredReportDetails(chatId, expiredEvents);
+        }
+    }
+}
 const escapeHtml = value => String(value ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -85,7 +210,20 @@ function initialize(options = {}) {
         eventsByChatId.set(String(chatId), userEvents);
     }
 
-    configured = true;
+        configured = true;
+
+    cleanupExpiredErrorReports();
+
+    if (!errorReportCleanupTimer) {
+        errorReportCleanupTimer = setInterval(
+            cleanupExpiredErrorReports,
+            ERROR_REPORT_CLEANUP_INTERVAL_MS
+        );
+
+        if (typeof errorReportCleanupTimer.unref === 'function') {
+            errorReportCleanupTimer.unref();
+        }
+    }
 }
 
 function ensureInitialized() {
